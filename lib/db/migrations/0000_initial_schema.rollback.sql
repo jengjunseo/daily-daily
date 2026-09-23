@@ -1,0 +1,19 @@
+-- Manual rollback for a fresh Daily Daily database. This drops user data; never run on production without a verified backup.
+DROP TABLE IF EXISTS daily_category_ordinal;
+DROP TABLE IF EXISTS trait_progress;
+DROP TABLE IF EXISTS settlement_job;
+DROP TABLE IF EXISTS region_unlock;
+DROP TABLE IF EXISTS quest_progress;
+DROP TABLE IF EXISTS achievement;
+DROP TABLE IF EXISTS inventory;
+DROP TABLE IF EXISTS reward_ledger;
+DROP TABLE IF EXISTS event_occurrence;
+DROP TABLE IF EXISTS hero_collection;
+DROP TABLE IF EXISTS daily_settlement;
+DROP TABLE IF EXISTS activity_log;
+DROP TABLE IF EXISTS user_pin;
+DROP TABLE IF EXISTS user_favorite;
+DROP TABLE IF EXISTS activity_type;
+DROP TABLE IF EXISTS activity_category;
+DROP TABLE IF EXISTS user_settings;
+DROP TABLE IF EXISTS user_profile;
