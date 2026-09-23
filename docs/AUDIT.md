@@ -50,4 +50,11 @@ Implementation was added on the workspace branch `feat/daily-daily` after the au
 
 ## Runtime boundary
 
-The application is local-first. IndexedDB and localStorage are used for the active profile; there is no sign-in provider, authenticated log API, server-side account isolation, or automatic multi-device sync. The PostgreSQL schema is an integration artifact and is not connected to the client flow. `/api/cron/settle` verifies `CRON_SECRET`, but no cloud settlement worker runs; it skips when `DATABASE_URL` is absent and returns 503 if a database is configured without the worker. No Cron schedule is registered. Vercel project settings, environment variables, and plan remain unverified until the deployment attempt.
+The application is local-first. IndexedDB and localStorage are used for the active profile; there is no sign-in provider, authenticated log API, server-side account isolation, or automatic multi-device sync. The PostgreSQL schema is an integration artifact and is not connected to the client flow. `/api/cron/settle` verifies `CRON_SECRET`, but no cloud settlement worker runs; it skips when `DATABASE_URL` is absent and returns 503 if a database is configured without the worker. No Cron schedule is registered. Vercel project settings, environment-variable configuration, and plan remain unverified because the project-read connector rejected its documented argument schema.
+
+## Vercel deployment
+
+- The connected Git integration deployed preview commit 55afdf3b4452c995387a4d25c864d283057275df to daily-daily-1v6mwj2pw-wondaes-projects-fe5c826b.vercel.app; Vercel reported READY.
+- Merging PR #1 to main deployed production commit 56dce3b265e5893fd8d7c7f4ed7c6df93cc7432e; Vercel reported READY and assigned daily-daily-nine.vercel.app, daily-daily-wondaes-projects-fe5c826b.vercel.app, and daily-daily-git-main-wondaes-projects-fe5c826b.vercel.app.
+- Direct requests to the canonical deployment URL redirected to Vercel team SSO. The available in-app browser was unavailable, so the deployed HTML and API response bodies could not be inspected from this session. The local mobile Playwright flow and production build passed.
+- The Vercel project read call could not inspect environment variables, framework settings, or plan. No CRON_SECRET or DATABASE_URL was configured, and no Cron schedule was registered.
