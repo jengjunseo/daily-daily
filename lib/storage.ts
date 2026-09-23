@@ -5,6 +5,9 @@ const DATABASE_VERSION = 1;
 const STATE_STORE = "state";
 const OUTBOX_STORE = "outbox";
 const STORAGE_KEY = "daily-daily:state:v1";
+const OUTBOX_STORAGE_KEY = "daily-daily:outbox:v1";
+
+export type OfflineWrite = { id: string; payload: unknown; queuedAt: string };
 
 function hydrateState(state: AppState): AppState {
   return { ...state, eventOutcomes: state.eventOutcomes ?? {} };
@@ -105,33 +108,64 @@ export async function persistState(state: AppState): Promise<"indexeddb" | "loca
 }
 
 export async function queueOfflineWrite(id: string, payload: unknown): Promise<void> {
-  const database = await openDatabase();
-  await new Promise<void>((resolve, reject) => {
-    const transaction = database.transaction(OUTBOX_STORE, "readwrite");
-    transaction.objectStore(OUTBOX_STORE).put({ id, payload, queuedAt: new Date().toISOString() });
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error ?? new Error("Could not store offline work"));
-  });
-  database.close();
+  const entry: OfflineWrite = { id, payload, queuedAt: new Date().toISOString() };
+  try {
+    const database = await openDatabase();
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction(OUTBOX_STORE, "readwrite");
+      transaction.objectStore(OUTBOX_STORE).put(entry);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error ?? new Error("Could not store offline work"));
+    });
+    database.close();
+  } catch {
+    const queued = JSON.parse(localStorage.getItem(OUTBOX_STORAGE_KEY) ?? "[]") as OfflineWrite[];
+    localStorage.setItem(OUTBOX_STORAGE_KEY, JSON.stringify([...queued.filter((item) => item.id !== id), entry]));
+  }
+}
+
+export async function listOfflineWrites(): Promise<OfflineWrite[]> {
+  try {
+    const database = await openDatabase();
+    const entries = await new Promise<OfflineWrite[]>((resolve, reject) => {
+      const request = database.transaction(OUTBOX_STORE, "readonly").objectStore(OUTBOX_STORE).getAll();
+      request.onsuccess = () => resolve(request.result as OfflineWrite[]);
+      request.onerror = () => reject(request.error ?? new Error("Could not read pending work"));
+    });
+    database.close();
+    return entries;
+  } catch {
+    try { return JSON.parse(localStorage.getItem(OUTBOX_STORAGE_KEY) ?? "[]") as OfflineWrite[]; }
+    catch { return []; }
+  }
+}
+
+export async function clearOfflineWrites(ids?: string[]): Promise<void> {
+  try {
+    const database = await openDatabase();
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction(OUTBOX_STORE, "readwrite");
+      const store = transaction.objectStore(OUTBOX_STORE);
+      if (ids) for (const id of ids) store.delete(id);
+      else store.clear();
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error ?? new Error("Could not clear synced work"));
+    });
+    database.close();
+  } catch {
+    const queued = await listOfflineWrites();
+    const remaining = ids ? queued.filter((entry) => !ids.includes(entry.id)) : [];
+    localStorage.setItem(OUTBOX_STORAGE_KEY, JSON.stringify(remaining));
+  }
 }
 
 export async function countOfflineWrites(): Promise<number> {
-  try {
-    const database = await openDatabase();
-    const count = await new Promise<number>((resolve, reject) => {
-      const request = database.transaction(OUTBOX_STORE, "readonly").objectStore(OUTBOX_STORE).count();
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-    database.close();
-    return count;
-  } catch {
-    return 0;
-  }
+  return (await listOfflineWrites()).length;
 }
 
 export async function deleteLocalAccount(): Promise<void> {
   localStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem(OUTBOX_STORAGE_KEY);
   await new Promise<void>((resolve) => {
     if (typeof indexedDB === "undefined") return resolve();
     const request = indexedDB.deleteDatabase(DATABASE_NAME);

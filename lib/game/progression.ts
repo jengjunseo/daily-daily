@@ -44,11 +44,16 @@ export function grantRewardOnce(
 }
 
 export function grantHeroDiscovery(state: AppState, hero: HeroDefinition): AppState {
+  const { xp, items } = heroDiscoveryReward(hero);
+  return grantRewardOnce(state, "settlement", `settlement_first:${hero.no}`, xp, items);
+}
+
+export function heroDiscoveryReward(hero: HeroDefinition): { xp: Record<Trait, number>; items: Record<string, number> } {
   const rewardXp = ({ legendary: 400, epic: 200, rare: 100, uncommon: 50, common: 30, basic: 0 })[hero.rarity];
   const each = Math.floor(rewardXp / 6);
   const remainder = rewardXp - each * 6;
   const xp = Object.fromEntries(TRAITS.map((trait, index) => [trait, each + (index < remainder ? 1 : 0)])) as Record<Trait, number>;
-  return grantRewardOnce(state, "settlement", `settlement_first:${hero.no}`, xp, hero.rarity === "legendary" || hero.rarity === "epic" ? { "title:별의 기록자": 1 } : {});
+  return { xp, items: hero.rarity === "legendary" || hero.rarity === "epic" ? { "title:별의 기록자": 1 } : {} };
 }
 
 export function recomputeLogXp(state: AppState, date: string): AppState {
@@ -83,4 +88,3 @@ export function recomputeLogXp(state: AppState, date: string): AppState {
   }
   return { ...next, traits };
 }
-

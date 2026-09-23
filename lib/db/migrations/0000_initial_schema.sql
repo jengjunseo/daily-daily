@@ -1,37 +1,47 @@
 -- Daily Daily schema, additive for an empty application database.
--- user_id is a text subject identifier so an auth provider can be selected later.
--- Until server authentication is configured, the shipped app stores profiles locally.
+-- user_id is the authenticated provider subject identifier; the browser UI remains local-first.
 
 CREATE TABLE IF NOT EXISTS user_profile (
   user_id text PRIMARY KEY, display_name text NOT NULL DEFAULT '', timezone text NOT NULL DEFAULT 'Asia/Seoul',
   day_boundary_minutes integer NOT NULL DEFAULT 0 CHECK (day_boundary_minutes BETWEEN 0 AND 240),
   avatar_id integer NOT NULL DEFAULT 0, title_id text NOT NULL DEFAULT 'chronicler', created_at timestamptz NOT NULL DEFAULT now()
 );
+--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS user_settings (
   user_id text PRIMARY KEY, bgm_enabled boolean NOT NULL DEFAULT true, bgm_volume real NOT NULL DEFAULT .25 CHECK (bgm_volume BETWEEN 0 AND 1),
   sfx_enabled boolean NOT NULL DEFAULT true, sfx_volume real NOT NULL DEFAULT .5 CHECK (sfx_volume BETWEEN 0 AND 1), skip_title boolean NOT NULL DEFAULT false,
   reduced_effects boolean NOT NULL DEFAULT false, timezone text NOT NULL DEFAULT 'Asia/Seoul'
 );
+--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS activity_category (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id text, key text NOT NULL, name text NOT NULL, icon text NOT NULL DEFAULT '✦', color text NOT NULL DEFAULT '#aaa9a2',
   group_key text NOT NULL DEFAULT 'life', trait_weights jsonb NOT NULL DEFAULT '{}'::jsonb, is_system boolean NOT NULL DEFAULT false, sort_order integer NOT NULL DEFAULT 0, archived boolean NOT NULL DEFAULT false
 );
+--> statement-breakpoint
 CREATE UNIQUE INDEX IF NOT EXISTS activity_category_system_key_uq ON activity_category(key) WHERE user_id IS NULL;
+--> statement-breakpoint
 CREATE UNIQUE INDEX IF NOT EXISTS activity_category_user_key_uq ON activity_category(user_id,key) WHERE user_id IS NOT NULL;
+--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS activity_type (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id text, category_id uuid NOT NULL REFERENCES activity_category(id), key text NOT NULL, name text NOT NULL, icon text,
   metric_schema_key text NOT NULL DEFAULT 'duration', trait_weights jsonb, tags jsonb NOT NULL DEFAULT '[]'::jsonb, is_system boolean NOT NULL DEFAULT false, archived boolean NOT NULL DEFAULT false
 );
+--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS activity_type_category_idx ON activity_type(category_id);
+--> statement-breakpoint
 CREATE UNIQUE INDEX IF NOT EXISTS activity_type_user_category_key_uq ON activity_type(user_id,category_id,key) WHERE user_id IS NOT NULL;
+--> statement-breakpoint
 CREATE UNIQUE INDEX IF NOT EXISTS activity_type_system_category_key_uq ON activity_type(category_id,key) WHERE user_id IS NULL;
+--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS user_favorite (
   user_id text NOT NULL, kind text NOT NULL CHECK(kind IN ('subject','project','book','menu','activity_type')), value text NOT NULL, use_count integer NOT NULL DEFAULT 1 CHECK(use_count>0), last_used_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY(user_id,kind,value)
 );
+--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS user_pin (
   user_id text NOT NULL, category_id uuid NOT NULL REFERENCES activity_category(id), position integer NOT NULL CHECK(position>=0), PRIMARY KEY(user_id,category_id), UNIQUE(user_id,position)
 );
+--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS activity_log (
   id uuid PRIMARY KEY, user_id text NOT NULL, category_id uuid NOT NULL REFERENCES activity_category(id), activity_type_id uuid REFERENCES activity_type(id),
   status text NOT NULL DEFAULT 'completed' CHECK(status IN ('in_progress','completed')), started_at timestamptz NOT NULL, ended_at timestamptz,
@@ -39,50 +49,67 @@ CREATE TABLE IF NOT EXISTS activity_log (
   note text NOT NULL DEFAULT '', source text NOT NULL DEFAULT 'detailed' CHECK(source IN ('quick','detailed','timer')), created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), deleted_at timestamptz,
   version integer NOT NULL DEFAULT 1 CHECK(version>0), CHECK(ended_at IS NULL OR ended_at>=started_at)
 );
+--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS activity_log_user_date_idx ON activity_log(user_id,attributed_date);
+--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS activity_log_user_status_idx ON activity_log(user_id,status);
+--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS daily_settlement (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id text NOT NULL, date date NOT NULL, revision integer NOT NULL CHECK(revision>0), status text NOT NULL DEFAULT 'final' CHECK(status IN ('final','superseded')),
   hero_type_no integer NOT NULL CHECK(hero_type_no BETWEEN 1 AND 100), features jsonb NOT NULL, reasons jsonb NOT NULL, narrative text[] NOT NULL DEFAULT '{}', rule_version text NOT NULL DEFAULT '1.0.0',
   input_hash text NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(user_id,date,revision)
 );
+--> statement-breakpoint
 CREATE UNIQUE INDEX IF NOT EXISTS daily_settlement_final_uq ON daily_settlement(user_id,date) WHERE status='final';
+--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS hero_collection (
   user_id text NOT NULL, hero_type_no integer NOT NULL CHECK(hero_type_no BETWEEN 1 AND 100), first_obtained_date date NOT NULL, count integer NOT NULL DEFAULT 1 CHECK(count>0), PRIMARY KEY(user_id,hero_type_no)
 );
+--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS event_occurrence (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id text NOT NULL, event_id text NOT NULL, date date NOT NULL, trigger_log_id uuid REFERENCES activity_log(id), chain_id text, chain_step integer,
   seen_at timestamptz, data jsonb NOT NULL DEFAULT '{}'::jsonb, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(user_id,event_id,date)
 );
+--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS reward_ledger (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id text NOT NULL, source_type text NOT NULL CHECK(source_type IN ('event','settlement','achievement','quest','log_xp')), source_key text NOT NULL,
   xp jsonb NOT NULL DEFAULT '{}'::jsonb, items jsonb NOT NULL DEFAULT '{}'::jsonb, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(user_id,source_type,source_key)
 );
+--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS inventory (
   user_id text NOT NULL, item_id text NOT NULL, quantity integer NOT NULL DEFAULT 0 CHECK(quantity>=0), first_obtained_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(user_id,item_id)
 );
+--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS achievement (
   user_id text NOT NULL, achievement_id text NOT NULL, unlocked_at timestamptz NOT NULL DEFAULT now(), date date NOT NULL, PRIMARY KEY(user_id,achievement_id)
 );
+--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS quest_progress (
   user_id text NOT NULL, chain_id text NOT NULL, step integer NOT NULL DEFAULT 0 CHECK(step>=0), state text NOT NULL DEFAULT 'active' CHECK(state IN ('active','done','expired')),
   started_date date NOT NULL, updated_at timestamptz NOT NULL DEFAULT now(), data jsonb NOT NULL DEFAULT '{}'::jsonb, PRIMARY KEY(user_id,chain_id)
 );
+--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS region_unlock (
   user_id text NOT NULL, region_id text NOT NULL, unlocked_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(user_id,region_id)
 );
+--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS settlement_job (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id text NOT NULL, date date NOT NULL, reason text NOT NULL CHECK(reason IN ('midnight','edit','late_entry','manual')),
   status text NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','running','done','failed')), attempts integer NOT NULL DEFAULT 0, run_after timestamptz NOT NULL DEFAULT now(), locked_until timestamptz, created_at timestamptz NOT NULL DEFAULT now()
 );
+--> statement-breakpoint
 CREATE UNIQUE INDEX IF NOT EXISTS settlement_job_open_user_date_uq ON settlement_job(user_id,date) WHERE status IN ('pending','running');
+--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS settlement_job_ready_idx ON settlement_job(status,run_after);
+--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS trait_progress (
   user_id text NOT NULL, trait text NOT NULL CHECK(trait IN ('knowledge','strength','creativity','recovery','bond','calm')), xp integer NOT NULL DEFAULT 0 CHECK(xp>=0), level integer NOT NULL DEFAULT 1 CHECK(level BETWEEN 1 AND 99), PRIMARY KEY(user_id,trait)
 );
+--> statement-breakpoint
 CREATE TABLE IF NOT EXISTS daily_category_ordinal (
   user_id text NOT NULL, date date NOT NULL, category_key text NOT NULL, ordinal integer NOT NULL DEFAULT 0 CHECK(ordinal>=0), signatures jsonb NOT NULL DEFAULT '{}'::jsonb, PRIMARY KEY(user_id,date,category_key)
 );
+--> statement-breakpoint
 
 -- Idempotent system category seed. JSON weights retain the 70/30 trait allocation.
 INSERT INTO activity_category(key,name,icon,color,group_key,trait_weights,is_system,sort_order) VALUES
@@ -100,6 +127,7 @@ INSERT INTO activity_category(key,name,icon,color,group_key,trait_weights,is_sys
  ('relationship','인연','♡','#d5ae55','social','{"bond":0.7,"recovery":0.3}',true,12),
  ('life','생활','⌂','#aaa9a2','life','{"calm":0.7,"strength":0.3}',true,13)
 ON CONFLICT DO NOTHING;
+--> statement-breakpoint
 
 WITH type_rows(category_key, entries) AS (VALUES
  ('sleep',ARRAY['밤잠','낮잠','쪽잠','선잠·밤샘 후']),('meal',ARRAY['아침','점심','저녁','간식','야식']),
@@ -113,3 +141,5 @@ INSERT INTO activity_type(category_id,key,name,metric_schema_key,tags,is_system)
 SELECT c.id, lower(encode(convert_to(e.name,'UTF8'),'hex')), e.name, 'duration', jsonb_build_array(c.group_key), true
 FROM type_rows t CROSS JOIN LATERAL unnest(t.entries) AS e(name) JOIN activity_category c ON c.key=t.category_key AND c.user_id IS NULL
 ON CONFLICT DO NOTHING;
+--> statement-breakpoint
+

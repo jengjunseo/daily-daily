@@ -8,7 +8,7 @@ export const userProfiles = pgTable("user_profile", {
 
 export const userSettings = pgTable("user_settings", {
   userId: text("user_id").primaryKey(), bgmEnabled: boolean("bgm_enabled").notNull().default(true), bgmVolume: real("bgm_volume").notNull().default(0.25),
-  sfxEnabled: boolean("sfx_enabled").notNull().default(true), sfxVolume: real("sfx_volume").notNull().default(0.5), skipTitle: boolean("skip_title").notNull().default(false), reducedEffects: boolean("reduced_effects").notNull().default(false), timezone: text("timezone").notNull().default("Asia/Seoul"),
+  sfxEnabled: boolean("sfx_enabled").notNull().default(true), sfxVolume: real("sfx_volume").notNull().default(0.5), skipTitle: boolean("skip_title").notNull().default(false), reducedEffects: boolean("reduced_effects").notNull().default(false), eventEffects: boolean("event_effects").notNull().default(true), timezone: text("timezone").notNull().default("Asia/Seoul"),
 });
 
 export const activityCategories = pgTable("activity_category", {

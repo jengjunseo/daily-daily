@@ -1,60 +1,58 @@
-# Repository Audit
+﻿# Repository Audit and Delivery Status
 
 Audit date: 2026-09-23
 
-## Scope and evidence
+## Repository baseline
 
-- The supplied workspace initially contained `daily-daily_master_spec.md` and an empty `docs/` directory. It had no `.git/`, package manifest, application source, `.env.example`, `vercel.json`, or migration files.
-- GitHub metadata for `jengjunseo/daily-daily` reports a public repository with default branch `main`. The GitHub contents API returned `404: This repository is empty`; `git ls-remote --heads` returned no refs. There is no existing code or data schema to audit.
-- The connected Vercel team lists a project named `daily-daily` (`prj_u02CIhimVsqZ7eYPx6HmVbYehrys`). Its deployment list is empty. Project settings and environment-variable configuration could not be inspected through the available connector call.
-- The local machine has Node.js `v24.12.0`, npm `11.6.2`, Git, and GitHub CLI. There is no `pnpm`, `yarn`, Docker, or Vercel CLI command on PATH. `gh auth status` reports that the local GitHub keyring token is invalid. GitHub App access is available through the connected GitHub tools.
-- A normal local `git ls-remote` was blocked by the network sandbox. The approved elevated read-only retry completed and returned no branch refs.
+The GitHub repository `jengjunseo/daily-daily` was empty at the start of this task; there were no routes, application code, schema, user records, package manifest, or tests to preserve. The Vercel team already had a `daily-daily` project (`prj_u02CIhimVsqZ7eYPx6HmVbYehrys`), but its project settings and environment-variable values could not be read through the available connector. The master plan was copied verbatim to [`daily-daily-spec.md`](daily-daily-spec.md).
 
-## Existing stack and functionality
+The implementation follows the specification's fallback stack: Next.js App Router, TypeScript, Tailwind CSS, Drizzle/Postgres, Vitest, and Playwright. The game calculations remain framework-independent. No production database or OAuth credentials were supplied.
 
-| Area | Finding |
-|---|---|
-| Framework / routing | None present; not applicable |
-| Language / styling / state management | None present; not applicable |
-| Package manager | None present; npm is available locally |
-| Database / ORM / migrations / schema | None present; repository is empty |
-| Authentication / session / user ID | None present; repository is empty |
-| Tests | No test files or scripts present |
-| Vercel configuration / Cron / environment variables | No local configuration present; remote project settings unverified |
-| Existing application features | None present in the repository |
-| Existing user data | None present in the repository |
+## Current implementation
 
-## Baseline smoke checks
+- **Client:** mobile-first guest experience backed by IndexedDB and a localStorage recovery copy. Mutated logs, profile preferences, and categories enter a local outbox. Settings retries when a signed-in browser comes online, displays pending counts, and offers server/local choices for version conflicts. JSON/CSV export and local profile deletion are available.
+- **Authentication and API:** Auth.js GitHub OAuth is enabled when `AUTH_SECRET`, `AUTH_GITHUB_ID`, and `AUTH_GITHUB_SECRET` are configured. A shared `requireUserApiContext` derives the account from the session. Profile, category, favorite, pin, log CRUD, and sync routes scope data by that identity. Log updates use optimistic versions; sync rejects stale edits and returns the authenticated owner's server copy for resolution.
+- **Database:** PostgreSQL/Drizzle schema plus additive migrations `0000_initial_schema.sql` and `0001_add_event_effects.sql`, a Drizzle migration journal, and rollback SQL are present. PGlite verifies migration replay and the production migrator. Production database setup/migration has not been run.
+- **Settlement:** the database worker enqueues overdue dates, claims jobs with row locking, creates immutable revisions, supersedes previous final rows, deduplicates first-discovery rewards, and retries failed work. Log and sync reads run a per-user settlement catch-up. `vercel.json` schedules `/api/cron/settle` daily at 00:05 UTC. Production Cron activation and `CRON_SECRET`/`DATABASE_URL` are unverified.
+- **Content:** all 100 hero types are selectable in deterministic fixtures. Event/item/quest/recipe/region references are validated. The custom-category wizard captures icon, color, trait weights, tag, and metric template. Six time-of-day home scenes, per-exercise set lists, layered audio/background scenes, map navigation, and adventurer equipment remain partial as recorded below.
 
-Install, build, and test could not be run before implementation because the repository has no source files or package manifest. This is an empty-repository finding, not a passing test result.
+## Verification evidence
 
-## Integration decision
+Latest local checks on the implementation worktree:
 
-The GitHub repository is empty, so there is no existing application route or behavior to preserve. The implementation will occupy the repository root as a new app, following the specification's fallback stack. The original master document is copied verbatim to `docs/daily-daily-spec.md`; the supplied source copy remains at the workspace root.
-
-## Deployment and credentials
-
-The Vercel project exists but has no deployments. The project is listed under the connected Vercel team, but its Git link, framework/root settings, plan, and environment-variable names have not been verified. No local Vercel CLI or Vercel project link was found. The local GitHub CLI token is invalid; commits will be pushed through the connected GitHub integration if local authenticated Git access remains unavailable.
-
-## Implementation verification
-
-Implementation was added on the workspace branch `feat/daily-daily` after the audit above. The delivered application uses Next.js App Router, TypeScript, Tailwind CSS, React state, Vitest, Playwright, Drizzle, and a PostgreSQL migration. There was no pre-existing data to preserve.
-
-- `npm run lint` — passed.
+- `npm run lint` — passed with no warnings.
 - `npm run typecheck` — passed.
-- `npm test` — 4 files, 17 tests passed. Includes the SQL migration applied twice in PGlite, uniqueness enforcement, 23:00–1:30 day splitting, New York spring/fall DST, sleep date attribution, deterministic judgments, selectable fixtures for all 100 heroes, 500 seeded log-input fuzz cases, protected heroes 019–021, short-sleep rarity gate, settlement revision/idempotency, event replay idempotency, reward idempotency, XP cap, event/item/quest/recipe/region reference checks, and event template/content minimums.
-- `npm run test:e2e` — 1 Playwright test passed at the iPhone 13 viewport in Chromium: guest profile, study record, chronicle, sleep start and wake, and settings persistence.
-- `npm run build` — passed; `/` prerenders, `/api/health` and `/api/cron/settle` run dynamically.
-- `npm audit --json` — 0 reported vulnerabilities across 617 resolved packages.
-- Lighthouse mobile scoring was not run.
+- `npm test` — 6 files, 27 tests passed. Coverage includes two additive migration replay, account deletion isolation, profile settings, API account isolation, stale-version conflicts, offline sync/idempotency, favorite recording, concurrent settlement, revision/reward idempotency, Cron authorization, deterministic 100-hero fixtures, 500 seeded inputs, time attribution/DST, and content references.
+- `npm run test:e2e` — 1 mobile Playwright test passed: guest onboarding, study log, chronicle, sleep start/wake, local settings, and pending outbox visibility.
+- `npm run build` — passed after the latest sync/migration changes; `/` is dynamic for runtime Auth.js session and Vercel env reads. Route handlers include Auth.js, categories, favorites, pins, profile, sync, logs, health, and Cron.
+- `npm audit` — 0 reported vulnerabilities.
+- Lighthouse was not run. No automated end-to-end test yet covers OAuth, authenticated prior-day settlement, sync, or cross-account behavior against a deployed service.
 
-## Runtime boundary
+## H completion matrix
 
-The application is local-first. IndexedDB and localStorage are used for the active profile; there is no sign-in provider, authenticated log API, server-side account isolation, or automatic multi-device sync. The PostgreSQL schema is an integration artifact and is not connected to the client flow. `/api/cron/settle` verifies `CRON_SECRET`, but no cloud settlement worker runs; it skips when `DATABASE_URL` is absent and returns 503 if a database is configured without the worker. No Cron schedule is registered. Vercel project settings, environment-variable configuration, and plan remain unverified because the project-read connector rejected its documented argument schema.
+| Priority | Status | Evidence and remaining work |
+|---|---|---|
+| P0-1 data/API | Partial | Auth.js, shared session context, profile/category/favorite/pin/log/sync APIs, optimistic log versions, metric-template validation, Postgres migrations, and PGlite account-isolation tests exist. Production database/OAuth config and deployed API behavior are unverified. |
+| P0-2 record UX | Partial | Local mobile log entry, timing/duration, sleep, history editing, and custom category wizard/template forms exist. Exercise set-list/copy UX, wheel time picker, and the full history/sleep edge-case flow remain. |
+| P0-3 deterministic settlement/Codex | Partial | 100-hero rules/content, deterministic local calculations, server settlement worker, revisions, queue retry/idempotency, and integration tests exist. Deployed DB/Cron operation and the full sign-in → prior-day settlement → Codex → edit/re-settlement flow are unverified. |
+| P0 close: offline/export/delete/accessibility/performance | Partial | Local persistence/recovery, offline outbox, online retry, sync conflict choices, JSON/CSV export, local and confirmed cloud deletion, reduced-motion support, and labeled controls exist. No production sync validation, complete accessibility audit, Lighthouse score, or measured large-history performance result is available. |
+| P1 home/audio/growth/events | Partial | Six traits, deterministic progression/events, 45 event definitions, and synthesized Web Audio exist. Six time-of-day layered home scenes and all event animations are incomplete. |
+| P2 achievements/quests/map/narrative/adventurer | Partial | 35 achievements, 5 quest chains, 12 regions, and deterministic narrative content exist. Full map navigation, background-skin selection, equipment slots, and complete adventurer presentation remain incomplete. |
 
-## Vercel deployment
+## Deployment and environment
 
-- The connected Git integration deployed preview commit 55afdf3b4452c995387a4d25c864d283057275df to daily-daily-1v6mwj2pw-wondaes-projects-fe5c826b.vercel.app; Vercel reported READY.
-- Merging PR #1 to main deployed production commit 56dce3b265e5893fd8d7c7f4ed7c6df93cc7432e; Vercel reported READY and assigned daily-daily-nine.vercel.app, daily-daily-wondaes-projects-fe5c826b.vercel.app, and daily-daily-git-main-wondaes-projects-fe5c826b.vercel.app.
-- Direct requests to the canonical deployment URL redirected to Vercel team SSO. The available in-app browser was unavailable, so the deployed HTML and API response bodies could not be inspected from this session. The local mobile Playwright flow and production build passed.
-- The Vercel project read call could not inspect environment variables, framework settings, or plan. No CRON_SECRET or DATABASE_URL was configured, and no Cron schedule was registered.
+The latest production deployment previously verified through Vercel was commit `2c66e85267d222832361c6bf7a41b693b1a983fd`, state READY, deployment `dpl_21WfdMFBAfptikTzbrdEkDCetRPD`. Vercel assigned `daily-daily-nine.vercel.app` and project-specific aliases. A direct fetch to `daily-daily-nine.vercel.app/` and `/api/health` returned `404 NOT_FOUND`; the deployment-specific URL redirected to Vercel team SSO. Thus READY confirms deployment build state, but not public route reachability or user flows. The current Auth.js/API/worker changes are not part of that deployment until the follow-up commit is merged and deployed.
+
+Vercel project environment variables, framework/protection settings, plan, and Cron activation could not be inspected through the configured project-read connector. Required values for the cloud path are `DATABASE_URL`, `AUTH_SECRET`, `AUTH_GITHUB_ID`, `AUTH_GITHUB_SECRET`, and `CRON_SECRET`. They are blank in `.env.example`. Do not mark cloud sync or production settlement active until the values are configured and the deployed routes are verified. No Lighthouse score is available.
+
+## Migrations and rollback
+
+The migrations are `lib/db/migrations/0000_initial_schema.sql` and `lib/db/migrations/0001_add_event_effects.sql`; the Drizzle journal is under `lib/db/migrations/meta/`. Apply with `npm run db:migrate` only after supplying a compatible Postgres URL. `0001_add_event_effects.rollback.sql` removes only its added preference column. `0000_initial_schema.rollback.sql` drops the full schema from a fresh integration database and must not be used as a routine production rollback. No production migration or rollback has been run.
+
+## Remaining release work
+
+1. Configure Vercel environment variables and a GitHub OAuth app callback for the chosen production domain.
+2. Resolve the production alias 404 / deployment SSO behavior, then verify public page and API responses.
+3. Apply the migration to the configured database and verify authenticated API isolation and the daily Cron worker in production.
+4. Complete the sign-in → sync → prior-day settlement → Codex → edit/re-settlement E2E against a configured database.
+5. Finish remaining P0 UX/accessibility/performance work and measure Lighthouse mobile scores against the H targets.
