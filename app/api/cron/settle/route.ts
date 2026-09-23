@@ -1,4 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
+import { getDatabase } from "@/lib/db/connection";
+import { enqueueAllMissingSettlementJobs, processPendingSettlementJobs } from "@/lib/db/settlement";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,8 +14,15 @@ function authorized(request: Request): boolean {
   return expectedBytes.length === suppliedBytes.length && timingSafeEqual(expectedBytes, suppliedBytes);
 }
 
-export function GET(request: Request) {
+export async function GET(request: Request) {
   if (!authorized(request)) return Response.json({ error: "Unauthorized" }, { status: 401, headers: { "Cache-Control": "no-store" } });
-  if (!process.env.DATABASE_URL) return Response.json({ status: "skipped", reason: "No cloud database is configured; the app settles local profiles when opened." }, { headers: { "Cache-Control": "no-store" } });
-  return Response.json({ status: "unavailable", reason: "Cloud settlement worker is not enabled until authenticated profile sync is configured." }, { status: 503, headers: { "Cache-Control": "no-store" } });
+  if (!process.env.DATABASE_URL) return Response.json({ status: "unavailable", reason: "DATABASE_URL is not configured" }, { status: 503, headers: { "Cache-Control": "no-store" } });
+  try {
+    const database = getDatabase();
+    const queued = await enqueueAllMissingSettlementJobs(database);
+    const processed = await processPendingSettlementJobs(database);
+    return Response.json({ status: "ok", queued, ...processed }, { headers: { "Cache-Control": "no-store" } });
+  } catch {
+    return Response.json({ status: "unavailable", reason: "Settlement batch failed" }, { status: 503, headers: { "Cache-Control": "no-store" } });
+  }
 }

@@ -32,6 +32,7 @@ test("guest onboarding, study log, chronicle, and local settings", async ({ page
   await expect(page.getByRole("button", { name: /잠자기 시작/ })).toBeVisible();
 
   await page.getByRole("button", { name: "설정 열기" }).click();
+  await expect(page.getByText(/동기화 대기 [1-9]\d*개/)).toBeVisible();
   await page.getByRole("switch", { name: "다음부터 타이틀 건너뛰기" }).click();
   await page.getByRole("button", { name: "완료" }).click();
   await page.reload();

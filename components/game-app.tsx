@@ -15,12 +15,25 @@ import { extractFeatures } from "@/lib/game/features";
 import { visibleSettlements, settleDatesForLog, ensureLocalSettlements, settleLocalDay } from "@/lib/game/settlement";
 import { characterLevel, calculateDayXp } from "@/lib/game/xp";
 import { localDateKey, localClock, localDateTimeToInstant, sleepAttributedDate, splitIntervalByLocalDate, formatDate, addDateDays } from "@/lib/game/time";
-import { createInitialState, deleteLocalAccount, exportCsv, exportJson, loadState, persistState } from "@/lib/storage";
-import { validateActivityLog } from "@/lib/validation";
+import { clearOfflineWrites, countOfflineWrites, createInitialState, deleteLocalAccount, exportCsv, exportJson, listOfflineWrites, loadState, persistState, queueOfflineWrite } from "@/lib/storage";
+import { validateActivityLog, validateActivityMetrics } from "@/lib/validation";
+import { finishSignOut, startGitHubSignIn } from "@/app/actions";
+import type { AuthenticatedUser } from "@/lib/auth/server-session";
 
 type Tab = "home" | "chronicle" | "codex" | "adventurer";
 type Modal = "log" | "settings" | "custom" | "event" | "settlement" | "hero" | null;
 type DetailFields = Record<string, string | boolean>;
+type SyncConflict = { id: string; local: ActivityLog; server: ActivityLog; canKeepLocal: boolean };
+type SyncSnapshot = {
+  logs: ActivityLog[];
+  categories: CategoryDefinition[];
+  pins: string[];
+  favorites?: AppState["favorites"];
+  account: {
+    profile: { displayName: string; timezone: string; avatarId: number; titleId: string; createdAt: string };
+    settings: AppState["settings"];
+  };
+};
 
 const avatarOptions = ["🧙🏻", "🧝🏻‍♀️", "🧑🏻‍🚀", "🧑🏻‍🎨", "🧑🏻‍🌾", "🧑🏻‍🍳"];
 const zones = ["Asia/Seoul", "Asia/Tokyo", "Asia/Singapore", "America/Los_Angeles", "America/New_York", "Europe/London", "Europe/Paris", "Australia/Sydney", "UTC"];
@@ -46,6 +59,25 @@ function saveDownload(name: string, content: string, type: string) {
   URL.revokeObjectURL(url);
 }
 
+async function readApiJson<T>(response: Response): Promise<T> {
+  const payload = await response.json().catch(() => ({})) as { error?: string };
+  if (!response.ok) throw new Error(payload.error ?? `Request failed (${response.status})`);
+  return payload as T;
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right));
+    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+function sameActivityLog(left: ActivityLog, right: ActivityLog): boolean {
+  return stableJson({ ...left, version: 0 }) === stableJson({ ...right, version: 0 });
+}
+
 function detailTitle(log: ActivityLog): string {
   const customName = String(log.details.project ?? log.details.subject ?? log.details.book ?? "");
   return customName && customName !== log.typeKey ? `${log.typeKey} · ${customName}` : log.typeKey;
@@ -66,8 +98,12 @@ function getDateMonth(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
-export function GameApp() {
+export function GameApp({ initialViewer, cloudConfigured }: { initialViewer: AuthenticatedUser | null; cloudConfigured: boolean }) {
   const [state, setState] = useState<AppState | null>(null);
+  const [pendingWrites, setPendingWrites] = useState(0);
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [syncMessage, setSyncMessage] = useState("");
+  const [syncConflicts, setSyncConflicts] = useState<SyncConflict[]>([]);
   const [introComplete, setIntroComplete] = useState(false);
   const [tab, setTab] = useState<Tab>("home");
   const [chronicleSection, setChronicleSection] = useState<"calendar"|"timeline"|"archive">("calendar");
@@ -87,6 +123,7 @@ export function GameApp() {
   const audioRef = useRef<AudioContext | null>(null);
   const audioTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const audioShouldPlayRef = useRef(false);
+  const syncActionRef = useRef<() => void>(() => {});
   const activeSleep = state?.logs.find((log) => !log.deletedAt && log.categoryKey === "sleep" && log.status === "in_progress");
 
   useEffect(() => {
@@ -103,6 +140,20 @@ export function GameApp() {
     });
     return () => { alive = false; };
   }, []);
+
+  useEffect(() => {
+    void countOfflineWrites().then(setPendingWrites);
+  }, []);
+
+  useEffect(() => {
+    if (!initialViewer || pendingWrites === 0 || syncConflicts.length > 0) return;
+    const resumeSync = () => {
+      if (navigator.onLine) syncActionRef.current();
+    };
+    window.addEventListener("online", resumeSync);
+    if (navigator.onLine) window.setTimeout(resumeSync, 700);
+    return () => window.removeEventListener("online", resumeSync);
+  }, [initialViewer, pendingWrites, syncConflicts.length]);
 
   useEffect(() => {
     if (!state) return;
@@ -147,6 +198,12 @@ export function GameApp() {
   const totalMinutes = activeDayLogs.reduce((sum, log) => sum + log.durationMin, 0);
   const currentHour = state ? Number(currentClock(state.profile.timezone).slice(0, 2)) : 12;
 
+  function queueLocalWrite(id: string, payload: unknown) {
+    void queueOfflineWrite(id, payload).then(async () => setPendingWrites(await countOfflineWrites())).catch(() => {
+      setSyncMessage("이 기기에서 동기화 대기 항목을 저장하지 못했어요. 기록은 기본 저장소에 보관했습니다.");
+    });
+  }
+
   function startMusic(enabled: boolean, volume: number) {
     if (!enabled || volume <= 0) return;
     try {
@@ -185,6 +242,7 @@ export function GameApp() {
     if (!state) return;
     const settings = { ...state.settings, ...patch };
     setState({ ...state, settings, profile: { ...state.profile, timezone: settings.timezone } });
+    queueLocalWrite("account-settings", { profile: state.profile, settings });
     if (patch.bgmEnabled !== undefined) {
       if (patch.bgmEnabled) startMusic(true, settings.bgmVolume);
       else if (audioTimerRef.current) { clearInterval(audioTimerRef.current); audioTimerRef.current = null; audioShouldPlayRef.current=false; }
@@ -208,6 +266,7 @@ export function GameApp() {
     const sleep: ActivityLog = { id: crypto.randomUUID(), categoryKey: "sleep", typeKey: type === "nap" ? "낮잠" : "밤잠", status: "in_progress", startedAt: now.toISOString(), endedAt: null, durationMin: 0, attributedDate: date, mood: null, details: { sleepType: type }, note: "", source: "timer", version: 1, deletedAt: null };
     setClockTick(now.getTime());
     setState({ ...state, logs: [...state.logs, sleep] });
+    queueLocalWrite(`log:${sleep.id}`, sleep);
     if (audioTimerRef.current) { clearInterval(audioTimerRef.current); audioTimerRef.current = null; audioShouldPlayRef.current=false;void audioRef.current?.suspend(); }
     setToast(type === "nap" ? "낮잠 기록을 시작했어요. 일어나면 기상 버튼을 눌러 주세요." : "좋은 꿈 꾸세요. 일어나면 기상 버튼을 눌러 주세요.");
   }
@@ -246,6 +305,7 @@ export function GameApp() {
     for(const date of new Set([priorLog?.attributedDate,log.attributedDate].filter((item):item is string=>Boolean(item)))) next = recomputeDateXp(next,date);
     const newEvents = next.events.filter((event) => event.triggerLogId === log.id && !state.events.some((oldEvent) => oldEvent.id === event.id && oldEvent.date === event.date));
     setState(next);
+    queueLocalWrite(`log:${log.id}`, log);
     playSaveCue(next.settings.sfxEnabled,next.settings.sfxVolume);
     setModal(null);
     setActiveLog(null);
@@ -272,19 +332,23 @@ export function GameApp() {
     if (!state) return;
     const deletedAt = new Date().toISOString();
     const nextLogs = state.logs.map((item) => item.id === log.id ? { ...item, deletedAt, version: item.version + 1 } : item);
+    const deletedLog = nextLogs.find((item) => item.id === log.id);
     let next = { ...state, logs: nextLogs };
     next = recomputeDateXp(next, log.attributedDate);
     next = settleDatesForLog(next, { ...log, deletedAt });
     setState(next);
+    if (deletedLog) queueLocalWrite(`log:${deletedLog.id}`, deletedLog);
     setModal(null);
     setToast("기록을 휴지통으로 옮겼어요.");
   }
 
-  function addCustomCategory(name: string, group: CategoryDefinition["group"], primary: Trait, secondary: Trait) {
+  function addCustomCategory(name: string, group: CategoryDefinition["group"], primary: Trait, secondary: Trait, icon: string, color: string, metricSchemaKey: NonNullable<CategoryDefinition["metricSchemaKey"]>, tag: string) {
     if (!state || !name.trim()) return;
     const key = `custom-${crypto.randomUUID()}`;
-    const nextCategory: CategoryDefinition = { key, name: name.trim(), icon: "✦", color: "#b9a071", group, primary, secondary, types: [name.trim()], isCustom: true, tag: "custom" };
+    const nextCategory: CategoryDefinition = { key, name: name.trim(), icon, color, group, primary, secondary, types: [name.trim()], isCustom: true, tag: tag.trim() || "custom", metricSchemaKey };
     setState({ ...state, customCategories: [...state.customCategories, nextCategory], pins: [...state.pins, key] });
+    queueLocalWrite(`category:${key}`, nextCategory);
+    queueLocalWrite("account-pins", [...state.pins, key]);
     setModal(null);
     openLogger(nextCategory);
   }
@@ -309,13 +373,194 @@ export function GameApp() {
   function setName(name: string, avatar: number) {
     if (!state) return;
     setState({ ...state, profile: { ...state.profile, displayName: name.trim(), avatarId: avatar } });
+    queueLocalWrite("account-profile", { ...state.profile, displayName: name.trim(), avatarId: avatar });
   }
 
   function beginAdventure(name:string,avatar:number,bgmEnabled:boolean) {
     if(!state)return;
     setState({...state,profile:{...state.profile,displayName:name.trim(),avatarId:avatar},settings:{...state.settings,bgmEnabled}});
+    queueLocalWrite("account-profile", { ...state.profile, displayName: name.trim(), avatarId: avatar });
+    queueLocalWrite("account-settings", { ...state.settings, bgmEnabled });
     setIntroComplete(true);
     startMusic(bgmEnabled,state.settings.bgmVolume);
+  }
+
+  async function syncNow() {
+    if (!state || !initialViewer || !cloudConfigured || syncBusy) {
+      setSyncMessage(!initialViewer ? "GitHub 계정을 연결하면 동기화할 수 있어요." : "동기화 서버 설정을 확인해 주세요.");
+      return;
+    }
+    setSyncBusy(true);
+    setSyncMessage("기록과 설정을 안전하게 맞추고 있어요…");
+    try {
+      let snapshot = await readApiJson<SyncSnapshot>(await fetch("/api/sync", { cache: "no-store" }));
+      const cloudAccountIsEstablished = Date.parse(snapshot.account.profile.createdAt) + 60_000 < Date.parse(state.profile.createdAt);
+      for (const custom of state.customCategories) {
+        await readApiJson(await fetch("/api/categories", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            key: custom.key, name: custom.name, icon: custom.icon, color: custom.color, group: custom.group,
+            primary: custom.primary, secondary: custom.secondary, typeNames: custom.types, metricSchemaKey: custom.metricSchemaKey ?? "duration", tag: custom.tag ?? "custom",
+          }),
+        }));
+      }
+      if (!cloudAccountIsEstablished) {
+        await readApiJson(await fetch("/api/profile", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            displayName: state.profile.displayName, avatarId: state.profile.avatarId, titleId: state.profile.titleId,
+            timezone: state.settings.timezone, bgmEnabled: state.settings.bgmEnabled, bgmVolume: state.settings.bgmVolume,
+            sfxEnabled: state.settings.sfxEnabled, sfxVolume: state.settings.sfxVolume, skipTitle: state.settings.skipTitle,
+            reducedEffects: state.settings.reducedEffects, eventEffects: state.settings.eventEffects,
+          }),
+        }));
+      }
+      const pins = state.pins.length ? state.pins : snapshot.pins;
+      if (state.pins.length) {
+        await readApiJson(await fetch("/api/pins", {
+          method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ keys: state.pins }),
+        }));
+      }
+      snapshot = await readApiJson<SyncSnapshot>(await fetch("/api/sync", { cache: "no-store" }));
+
+      const remoteById = new Map(snapshot.logs.map((log) => [log.id, log]));
+      const nextById = new Map(state.logs.map((log) => [log.id, log]));
+      const conflicts = new Map<string, SyncConflict>();
+      const uploads: ActivityLog[] = [];
+      for (const remote of snapshot.logs) {
+        const local = nextById.get(remote.id);
+        if (!local) { nextById.set(remote.id, remote); continue; }
+        if (local.version < remote.version) { nextById.set(remote.id, remote); continue; }
+        if (local.version === remote.version) {
+          if (!sameActivityLog(local, remote)) conflicts.set(local.id, { id: local.id, local, server: remote, canKeepLocal: !remote.deletedAt });
+          else nextById.set(remote.id, remote);
+          continue;
+        }
+        if (remote.deletedAt && local.deletedAt) { nextById.set(remote.id, remote); continue; }
+        if (remote.deletedAt && !local.deletedAt) {
+          conflicts.set(local.id, { id: local.id, local, server: remote, canKeepLocal: false });
+          continue;
+        }
+        if (local.version === remote.version + 1) uploads.push(local);
+        else conflicts.set(local.id, { id: local.id, local, server: remote, canKeepLocal: !remote.deletedAt });
+      }
+      for (const local of state.logs) {
+        if (remoteById.has(local.id) || local.deletedAt) continue;
+        uploads.push(local);
+      }
+
+      const syncedIds = new Set<string>();
+      const serverAfter = new Map(snapshot.logs.map((log) => [log.id, log]));
+      for (let offset = 0; offset < uploads.length; offset += 100) {
+        const batch = uploads.slice(offset, offset + 100);
+        const result = await readApiJson<{ synced: string[]; conflicts: Array<{ id: string; server: ActivityLog }>; logs: ActivityLog[] }>(await fetch("/api/sync", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ logs: batch }),
+        }));
+        result.synced.forEach((id) => syncedIds.add(id));
+        result.logs.forEach((log) => serverAfter.set(log.id, log));
+        for (const conflict of result.conflicts) {
+          const local = nextById.get(conflict.id);
+          if (local) conflicts.set(conflict.id, { id: conflict.id, local, server: conflict.server, canKeepLocal: !conflict.server.deletedAt });
+        }
+      }
+      for (const [id, server] of serverAfter) {
+        const local = nextById.get(id);
+        if (!local || syncedIds.has(id) || local.version < server.version) nextById.set(id, server);
+      }
+      for (const conflict of conflicts.values()) nextById.set(conflict.id, conflict.local);
+
+      const remoteCustom = snapshot.categories.filter((item) => item.isCustom);
+      const categoriesByKey = new Map([...remoteCustom, ...state.customCategories].map((item) => [item.key, item]));
+      const finalCategories = [...categoriesByKey.values()];
+      const nextState: AppState = {
+        ...state,
+        profile: cloudAccountIsEstablished ? {
+          ...state.profile,
+          displayName: snapshot.account.profile.displayName || state.profile.displayName,
+          avatarId: snapshot.account.profile.avatarId,
+          titleId: snapshot.account.profile.titleId,
+          timezone: snapshot.account.profile.timezone,
+        } : state.profile,
+        settings: cloudAccountIsEstablished ? { ...state.settings, ...snapshot.account.settings } : state.settings,
+        logs: [...nextById.values()].sort((left, right) => left.startedAt.localeCompare(right.startedAt)),
+        customCategories: finalCategories,
+        pins,
+        favorites: snapshot.favorites?.map((favorite) => ({ ...favorite, lastUsedAt: String(favorite.lastUsedAt) })) ?? state.favorites,
+      };
+      setState(ensureLocalSettlements(nextState));
+      setSyncConflicts([...conflicts.values()]);
+      const outbox = await listOfflineWrites();
+      const unresolved = new Set([...conflicts.keys()].map((id) => `log:${id}`));
+      await clearOfflineWrites(outbox.filter((entry) => !unresolved.has(entry.id)).map((entry) => entry.id));
+      setPendingWrites(await countOfflineWrites());
+      setSyncMessage(conflicts.size ? `${conflicts.size}개 기록에 다른 기기의 수정이 있어 선택이 필요해요.` : `${syncedIds.size}개 기록을 동기화했어요.`);
+    } catch (error) {
+      setSyncMessage(error instanceof Error ? error.message : "동기화하지 못했어요. 네트워크와 계정 설정을 확인해 주세요.");
+    } finally {
+      setSyncBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    syncActionRef.current = () => { void syncNow(); };
+  });
+
+  async function resolveSyncConflicts(choice: "local" | "server") {
+    if (!state || !syncConflicts.length) return;
+    try {
+      const nextById = new Map(state.logs.map((log) => [log.id, log]));
+      let remaining: SyncConflict[] = [];
+      if (choice === "server") {
+        for (const conflict of syncConflicts) nextById.set(conflict.id, conflict.server);
+      } else {
+        remaining = syncConflicts.filter((item) => !item.canKeepLocal);
+        const replacements = syncConflicts.filter((conflict) => conflict.canKeepLocal).map((conflict) => ({
+          ...conflict.local,
+          version: conflict.server.version + 1,
+        }));
+        const response = await readApiJson<{ synced: string[]; conflicts: Array<{ id: string; server: ActivityLog }>; logs: ActivityLog[] }>(await fetch("/api/sync", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ logs: replacements }),
+        }));
+        const servers = new Map(response.logs.map((log) => [log.id, log]));
+        for (const id of response.synced) {
+          const server = servers.get(id);
+          if (server) nextById.set(id, server);
+        }
+        for (const conflict of response.conflicts) {
+          const original = syncConflicts.find((item) => item.id === conflict.id);
+          if (!original) continue;
+          remaining = [...remaining.filter((item) => item.id !== conflict.id), { ...original, server: conflict.server, canKeepLocal: !conflict.server.deletedAt }];
+          nextById.set(conflict.id, original.local);
+        }
+      }
+      for (const conflict of remaining) nextById.set(conflict.id, conflict.local);
+      setState({ ...state, logs: [...nextById.values()].sort((left, right) => left.startedAt.localeCompare(right.startedAt)) });
+      setSyncConflicts(remaining);
+      const keep = new Set(remaining.map((item) => `log:${item.id}`));
+      await clearOfflineWrites(syncConflicts.filter((item) => !keep.has(`log:${item.id}`)).map((item) => `log:${item.id}`));
+      setPendingWrites(await countOfflineWrites());
+      setSyncMessage(remaining.length ? "일부 서버 기록은 복구할 수 없어 계정 기록을 유지했어요." : "충돌한 기록을 선택한 내용으로 정리했어요.");
+    } catch (error) {
+      setSyncMessage(error instanceof Error ? error.message : "충돌을 해결하지 못했어요. 다시 동기화해 주세요.");
+    }
+  }
+
+  async function deleteCloudAccount() {
+    if (!window.confirm("이 계정의 서버 기록, 설정, 도감 데이터를 영구 삭제할까요? 내보낸 파일은 삭제되지 않습니다.")) return;
+    try {
+      await readApiJson(await fetch("/api/profile", {
+        method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: true }),
+      }));
+      await deleteLocalAccount();
+      const fresh = createInitialState(state?.settings.timezone);
+      setState(fresh);
+      setSyncConflicts([]);
+      await finishSignOut();
+    } catch (error) {
+      setSyncMessage(error instanceof Error ? error.message : "계정 데이터를 삭제하지 못했어요.");
+    }
   }
 
   if (!state) return <main className="game-shell"><section className="game-frame"><div className="topline"><div className="wordmark"><span className="wordmark-mark">✦</span> DAILY DAILY</div></div><div className="empty-state">별빛을 모으고 있어요…</div></section></main>;
@@ -420,7 +665,7 @@ export function GameApp() {
     {orbOpen&&<><button className="orb-backdrop" aria-label="기록 메뉴 닫기" onClick={()=>setOrbOpen(false)}/><section className="orb-panel" aria-label="기록할 활동 선택"><div className="orb-header"><div><div className="eyebrow">CHOOSE YOUR FOOTPRINT</div><h2 style={{fontSize:18,margin:"5px 0 0",fontWeight:550}}>무엇을 기록할까요?</h2></div><button className="icon-btn" aria-label="닫기" onClick={()=>setOrbOpen(false)}><X size={16}/></button></div><div className="orb-grid">{orbPageItems.map((item)=><button className="orb-choice" key={item.key} onClick={()=>openLogger(item)}><span className="orb-ball">{item.icon}</span><span>{item.name}</span></button>)}{orbPage===pageCount-1&&<button className="orb-choice" onClick={()=>setModal("custom")}><span className="orb-ball">✚</span><span>새 행동 만들기</span></button>}</div><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:14}}><button className="secondary-button" onClick={()=>setOrbPage(Math.max(0,orbPage-1))} disabled={orbPage===0}>이전</button><span className="subtle">{orbPage+1} / {pageCount}</span><button className="secondary-button" onClick={()=>setOrbPage(Math.min(pageCount-1,orbPage+1))} disabled={orbPage>=pageCount-1}>더 보기 <MoreHorizontal size={14}/></button></div></section></>}
 
     {modal==="log"&&category&&<LogSheet category={category} state={state} initial={activeLog} onClose={()=>setModal(null)} onSave={saveLog} onDelete={activeLog?()=>deleteLog(activeLog):undefined}/>}
-    {modal==="settings"&&<SettingsSheet state={state} onClose={()=>setModal(null)} onUpdate={updateSettings} onProfile={(name,avatar)=>setName(name,avatar)} onExport={download} onReset={()=>void resetAccount()}/>}
+    {modal==="settings"&&<SettingsSheet state={state} viewer={initialViewer} cloudConfigured={cloudConfigured} pendingWrites={pendingWrites} syncBusy={syncBusy} syncMessage={syncMessage} conflictCount={syncConflicts.length} canKeepLocal={syncConflicts.length>0&&syncConflicts.every((item)=>item.canKeepLocal)} onSync={()=>void syncNow()} onResolveConflicts={(choice)=>void resolveSyncConflicts(choice)} onDeleteCloud={()=>void deleteCloudAccount()} onClose={()=>setModal(null)} onUpdate={updateSettings} onProfile={(name,avatar)=>setName(name,avatar)} onExport={download} onReset={()=>void resetAccount()}/>}
     {modal==="custom"&&<CustomCategorySheet onClose={()=>setModal(null)} onCreate={addCustomCategory}/>}
     {modal==="event"&&<EventSheet state={state} onClose={()=>{setState((prior)=>prior?{...prior,events:prior.events.map((event)=>({...event,seen:true}))}:prior);setModal(null);}}/>}
     {modal==="settlement"&&settlementForPopup&&<SettlementSheet state={state} settlement={selectedSettlement??settlementForPopup} onClose={()=>setModal(null)}/>}
@@ -509,7 +754,7 @@ function LogSheet({category,state,initial,onClose,onSave,onDelete}:{category:Cat
   const [type,setType]=useState(initial?.typeKey??category.types[0]??category.name);
   const [mood,setMood]=useState<number|null>(initial?.mood??null);
   const [note,setNote]=useState(initial?.note??"");
-  const [details,setDetails]=useState<DetailFields>(()=>initial?Object.fromEntries(Object.entries(initial.details).map(([k,v])=>[k,String(v)])):{ sleepType:"night",quality:"",mealType:"",amount:"adequate",form:"home",withSomeone:false,subject:"",studyMethod:"독학",problems:"",correct:"",focus:"3",understanding:"3",project:"",result:"진행",solvedProblems:"",workType:"기능",exerciseType:"",metricType:"strength",distanceKm:"",sets:"",reps:"",weightKg:"",genre:"",purpose:"",target:"",recovery:"",creationType:"",leisureType:"",lifeType:"" });
+   const [details,setDetails]=useState<DetailFields>(()=>initial?Object.fromEntries(Object.entries(initial.details).map(([k,v])=>[k,String(v)])):{ sleepType:"night",quality:"",mealType:"",amount:"adequate",form:"home",withSomeone:false,subject:"",studyMethod:"독학",problems:"",correct:"",focus:"3",understanding:"3",project:"",result:"진행",solvedProblems:"",workType:"기능",exerciseType:"",metricType:"strength",distanceKm:"",sets:"",reps:"",weightKg:"",genre:"",purpose:"",target:"",recovery:"",creationType:"",leisureType:"",lifeType:"",count:"",quantity:"",repetitions:"",paceMinPerKm:"",checked:false,rating:"" });
   const [error,setError]=useState("");
   function setField(key:string,value:string|boolean){setDetails((prior)=>({...prior,[key]:value}));}
   const numeric=(key:string)=>numberOrNull(String(details[key]??""));
@@ -534,13 +779,16 @@ function LogSheet({category,state,initial,onClose,onSave,onDelete}:{category:Cat
     if(category.key==="creation"&&!payload.creationType)payload.creationType=type;
     if(category.key==="leisure"&&!payload.leisureType)payload.leisureType=type;
     if(category.key==="study"&&payload.studyMethod){payload.method=payload.studyMethod;delete payload.studyMethod;}
-    const numberKeys=["quality","satisfaction","problems","correct","focus","understanding","solvedProblems","distanceKm","sets","reps","weightKg","rpe"];
+    const numberKeys=["quality","satisfaction","problems","correct","focus","understanding","solvedProblems","distanceKm","sets","reps","weightKg","rpe","count","quantity","repetitions","paceMinPerKm","rating"];
     for(const key of numberKeys){const value=numeric(key);if(value!==null&&Number.isFinite(value))payload[key]=value;}
     if(typeof details.withSomeone==="boolean")payload.withSomeone=details.withSomeone;
-    const log:ActivityLog={id:initial?.id??crypto.randomUUID(),categoryKey:category.key,typeKey:type,status:"completed",startedAt:started.toISOString(),endedAt:ended.toISOString(),durationMin:minutes,attributedDate:date,mood,note:note.trim(),details:payload,source:"detailed",version:(initial?.version??0)+1,deletedAt:null,customTraits:category.isCustom?{[category.primary]:0.7,[category.secondary]:0.3}:undefined,customTag:category.isCustom?"custom":undefined};
+    if(typeof details.checked==="boolean")payload.checked=details.checked;
+    const log:ActivityLog={id:initial?.id??crypto.randomUUID(),categoryKey:category.key,typeKey:type,status:"completed",startedAt:started.toISOString(),endedAt:ended.toISOString(),durationMin:minutes,attributedDate:date,mood,note:note.trim(),details:payload,source:"detailed",version:(initial?.version??0)+1,deletedAt:null,customTraits:category.isCustom?(category.primary===category.secondary?{[category.primary]:1}:{[category.primary]:0.7,[category.secondary]:0.3}):undefined,customTag:category.isCustom?(category.tag??"custom"):undefined};
     log.attributedDate=category.key==="sleep"?sleepAttributedDate(log,zone):date;
     const validated=validateActivityLog(log);
     if(!validated.success){setError(validated.message);return;}
+    const metricCheck=validateActivityMetrics(log,category.metricSchemaKey??"duration",Boolean(category.isCustom));
+    if(!metricCheck.success){setError(metricCheck.message);return;}
     onSave(validated.data);
   }
   return <div className="sheet-backdrop" onMouseDown={(event)=>{if(event.target===event.currentTarget)onClose();}}><section className="sheet" role="dialog" aria-modal="true" aria-labelledby="log-heading"><div className="sheet-handle"/><div className="sheet-head"><div><div className="eyebrow">{category.icon} {category.name.toUpperCase()} RECORD</div><h2 id="log-heading">{initial?"기록 다듬기":"새 발자국 남기기"}</h2></div><button className="icon-btn" aria-label="닫기" onClick={onClose}><X size={16}/></button></div><form onSubmit={onSubmit}><div className="form-grid">
@@ -555,7 +803,12 @@ function LogSheet({category,state,initial,onClose,onSave,onDelete}:{category:Cat
     {category.key==="development"&&<><TextField label="프로젝트" value={String(details.project??"")} onChange={(v)=>setField("project",v)} placeholder="예: Daily Daily"/><div className="field"><label>작업 종류</label><select value={String(details.workType??"기능")} onChange={(event)=>setField("workType",event.target.value)}>{category.types.map((v)=><option key={v}>{v}</option>)}</select></div><div className="field"><label>진행 결과</label><select value={String(details.result??"진행")} onChange={(event)=>setField("result",event.target.value)}>{["진행","완료","막힘","버그 해결","배포"].map((v)=><option key={v}>{v}</option>)}</select></div><NumberField label="해결한 문제 수" value={String(details.solvedProblems??"")} onChange={(v)=>setField("solvedProblems",v)}/></>}
     {category.key==="exercise"&&<><div className="field"><label>운동 구분</label><select value={String(details.metricType??"strength")} onChange={(event)=>setField("metricType",event.target.value)}><option value="strength">근력</option><option value="cardio">유산소</option><option value="flex">유연성</option><option value="sport">스포츠</option></select></div><div className="field"><label>운동 종류</label><select value={String(details.exerciseType||type)} onChange={(event)=>setField("exerciseType",event.target.value)}>{[...new Set(category.types)].map((v)=><option key={v}>{v}</option>)}</select></div>{details.metricType==="cardio"&&<NumberField label="거리 (km)" value={String(details.distanceKm??"")} onChange={(v)=>setField("distanceKm",v)}/ >}{details.metricType==="strength"&&<><NumberField label="세트 수" value={String(details.sets??"")} onChange={(v)=>setField("sets",v)}/><NumberField label="반복 수" value={String(details.reps??"")} onChange={(v)=>setField("reps",v)}/><NumberField label="중량 (kg)" value={String(details.weightKg??"")} onChange={(v)=>setField("weightKg",v)}/></>}<div className="field"><label htmlFor="exercise-rpe">운동 강도 RPE (1–10)</label><input id="exercise-rpe" type="number" min="1" max="10" value={String(details.rpe??"")} onChange={(event)=>setField("rpe",event.target.value)}/></div></>}
     {category.key==="reading"&&<><TextField label="책 제목" value={String(details.book??"")} onChange={(v)=>setField("book",v)} placeholder="읽은 책"/><TextField label="장르" value={String(details.genre??"")} onChange={(v)=>setField("genre",v)} placeholder="예: 소설"/></>}
-    {category.key==="outing"&&<div className="field"><label>외출 목적</label><select value={String(details.purpose??type)} onChange={(event)=>setField("purpose",event.target.value)}>{category.types.map((v)=><option key={v}>{v}</option>)}</select></div>}
+     {category.isCustom&&category.metricSchemaKey==="count"&&<NumberField label="횟수" value={String(details.count??"")} onChange={(v)=>setField("count",v)}/>}
+     {category.isCustom&&category.metricSchemaKey==="sets"&&<><NumberField label="세트 수" value={String(details.sets??"")} onChange={(v)=>setField("sets",v)}/><NumberField label="세트당 반복" value={String(details.reps??"")} onChange={(v)=>setField("reps",v)}/><NumberField label="중량 (kg)" value={String(details.weightKg??"")} onChange={(v)=>setField("weightKg",v)}/></>}
+     {category.isCustom&&category.metricSchemaKey==="distance"&&<><NumberField label="거리 (km)" value={String(details.distanceKm??"")} onChange={(v)=>setField("distanceKm",v)}/><NumberField label="페이스 (분/km)" value={String(details.paceMinPerKm??"")} onChange={(v)=>setField("paceMinPerKm",v)}/></>}
+     {category.isCustom&&category.metricSchemaKey==="check"&&<div className="field full"><label className="setting-row" style={{border:0,padding:0}}>완료했어요<input type="checkbox" checked={Boolean(details.checked)} onChange={(event)=>setField("checked",event.target.checked)}/></label></div>}
+     {category.isCustom&&category.metricSchemaKey==="rating"&&<SelectScale label="평점 (1–5)" value={String(details.rating||"3")} onChange={(v)=>setField("rating",v)}/>}
+     {category.key==="outing"&&<div className="field"><label>외출 목적</label><select value={String(details.purpose??type)} onChange={(event)=>setField("purpose",event.target.value)}>{category.types.map((v)=><option key={v}>{v}</option>)}</select></div>}
     {category.key==="relationship"&&<div className="field"><label>함께한 인연</label><select value={String(details.target??type)} onChange={(event)=>setField("target",event.target.value)}>{category.types.map((v)=><option key={v}>{v}</option>)}</select></div>}
     {category.key==="creation"&&<div className="field"><label>창작 종류</label><select value={String(details.creationType??type)} onChange={(event)=>setField("creationType",event.target.value)}>{category.types.map((v)=><option key={v}>{v}</option>)}</select></div>}
     {category.key==="leisure"&&<div className="field"><label>여가 활동</label><select value={String(details.leisureType??type)} onChange={(event)=>setField("leisureType",event.target.value)}>{category.types.map((v)=><option key={v}>{v}</option>)}</select></div>}
@@ -571,7 +824,12 @@ function TextField({label,value,onChange,placeholder}:{label:string;value:string
 function NumberField({label,value,onChange}:{label:string;value:string;onChange:(value:string)=>void}) { const id=fieldId(label);return <div className="field"><label htmlFor={id}>{label}</label><input id={id} type="number" min="0" value={value} onChange={(event)=>onChange(event.target.value)}/></div>; }
 function SelectScale({label,value,onChange}:{label:string;value:string;onChange:(value:string)=>void}) { const id=fieldId(label);return <div className="field"><label htmlFor={id}>{label}</label><select id={id} value={value} onChange={(event)=>onChange(event.target.value)}>{[1,2,3,4,5].map((v)=><option key={v}>{v}</option>)}</select></div>; }
 
-function SettingsSheet({state,onClose,onUpdate,onProfile,onExport,onReset}:{state:AppState;onClose:()=>void;onUpdate:(patch:Partial<AppState["settings"]>)=>void;onProfile:(name:string,avatar:number)=>void;onExport:(kind:"json"|"csv")=>void;onReset:()=>void}) {
+function SettingsSheet({state,onClose,onUpdate,onProfile,onExport,onReset,viewer,cloudConfigured,pendingWrites,syncBusy,syncMessage,conflictCount,canKeepLocal,onSync,onResolveConflicts,onDeleteCloud}:{
+  state:AppState; onClose:()=>void; onUpdate:(patch:Partial<AppState["settings"]>)=>void; onProfile:(name:string,avatar:number)=>void;
+  onExport:(kind:"json"|"csv")=>void; onReset:()=>void; viewer:AuthenticatedUser|null; cloudConfigured:boolean; pendingWrites:number;
+  syncBusy:boolean; syncMessage:string; conflictCount:number; canKeepLocal:boolean; onSync:()=>void;
+  onResolveConflicts:(choice:"local"|"server")=>void; onDeleteCloud:()=>void;
+}) {
   const [name,setName]=useState(state.profile.displayName);
   const [avatar,setAvatar]=useState(state.profile.avatarId);
   return <div className="sheet-backdrop" onMouseDown={(event)=>{if(event.target===event.currentTarget)onClose();}}><section className="sheet" role="dialog" aria-modal="true" aria-labelledby="settings-heading"><div className="sheet-handle"/><div className="sheet-head"><div><div className="eyebrow">YOUR PREFERENCES</div><h2 id="settings-heading">설정</h2></div><button className="icon-btn" aria-label="닫기" onClick={onClose}><X size={16}/></button></div>
@@ -582,15 +840,28 @@ function SettingsSheet({state,onClose,onUpdate,onProfile,onExport,onReset}:{stat
     <SettingSwitch label="배경 음악" checked={state.settings.bgmEnabled} onChange={(value)=>onUpdate({bgmEnabled:value})}/><SettingSwitch label="효과음" checked={state.settings.sfxEnabled} onChange={(value)=>onUpdate({sfxEnabled:value})}/><SettingSwitch label="간결한 이벤트 연출" checked={state.settings.reducedEffects} onChange={(value)=>onUpdate({reducedEffects:value,eventEffects:!value})}/>
     <div className="setting-row"><span>배경 음악 음량</span><input aria-label="배경 음악 음량" type="range" min="0" max="0.6" step="0.05" value={state.settings.bgmVolume} onChange={(event)=>onUpdate({bgmVolume:Number(event.target.value)})}/></div>
     <div className="setting-row"><span>효과음 음량</span><input aria-label="효과음 음량" type="range" min="0" max="1" step="0.1" value={state.settings.sfxVolume} onChange={(event)=>onUpdate({sfxVolume:Number(event.target.value)})}/></div>
-    <div className="section-head"><h2>내 데이터</h2></div><p className="subtle">기록, 메모, 프로필은 이 기기의 브라우저 저장소에 보관됩니다. 계정을 연결하지 않아도 사용할 수 있지만 다른 기기와 자동 동기화되지는 않습니다.</p><div className="button-row"><button className="secondary-button" onClick={()=>onExport("json")}><Download size={14}/> JSON 내보내기</button><button className="secondary-button" onClick={()=>onExport("csv")}><Download size={14}/> CSV 내보내기</button></div><button className="secondary-button" onClick={onReset} style={{width:"100%",marginTop:10,color:"#e8a995"}}>이 기기의 기록과 계정 삭제</button><div className="stat-label" style={{marginTop:13}}>배경 음악은 Web Audio 합성음으로 재생됩니다. 외부 이미지·글꼴·음원은 사용하지 않습니다.</div>
+    <div className="section-head" style={{marginTop:20}}><h2>계정 동기화</h2></div>
+    {!cloudConfigured ? <><p className="subtle">동기화를 켜려면 서버의 데이터베이스와 GitHub 로그인 설정이 필요합니다. 현재 기록은 이 기기에 안전하게 보관돼요.</p><p className="setting-row" aria-live="polite">동기화 대기 <strong>{pendingWrites}개</strong></p></> : viewer ? <>
+      <div className="setting-row"><span>연결된 계정</span><strong>{viewer.name || "GitHub"}</strong></div>
+      <div className="setting-row"><span>동기화 대기</span><strong>{pendingWrites}개</strong></div>
+      <div className="button-row"><button className="primary-button" onClick={onSync} disabled={syncBusy}>{syncBusy?"동기화 중…":"지금 동기화"}</button><form action={finishSignOut}><button className="secondary-button">로그아웃</button></form></div>
+      {syncMessage&&<p className="subtle" role="status" aria-live="polite">{syncMessage}</p>}
+      {conflictCount>0&&<div className="surface" style={{padding:12,marginTop:10}}><strong>{conflictCount}개 기록의 수정이 겹쳤어요.</strong><p className="subtle">어느 기기의 내용을 보관할지 선택해 주세요. 계정에서 삭제된 기록은 복구할 수 없어요.</p><div className="button-row"><button className="secondary-button" onClick={()=>onResolveConflicts("server")}>계정 기록 사용</button><button className="secondary-button" onClick={()=>onResolveConflicts("local")} disabled={!canKeepLocal}>이 기기 기록 사용</button></div></div>}
+      <button className="secondary-button" onClick={onDeleteCloud} style={{width:"100%",marginTop:10,color:"#e8a995"}}>서버 계정 데이터 영구 삭제</button>
+    </> : <>
+      <p className="subtle">GitHub 계정을 연결하면 이 기기에 쌓인 기록을 계정에 동기화하고 다른 기기에서 이어갈 수 있어요.</p>
+      <form action={startGitHubSignIn}><button className="primary-button">GitHub 계정 연결</button></form>
+      {syncMessage&&<p className="subtle" role="status" aria-live="polite">{syncMessage}</p>}
+    </>}
+    <div className="section-head"><h2>내 데이터</h2></div><p className="subtle">기록은 이 기기에 먼저 저장됩니다. 계정을 연결하고 동기화하면 다른 기기에서도 이어갈 수 있어요.</p><div className="button-row"><button className="secondary-button" onClick={()=>onExport("json")}><Download size={14}/> JSON 내보내기</button><button className="secondary-button" onClick={()=>onExport("csv")}><Download size={14}/> CSV 내보내기</button></div><button className="secondary-button" onClick={onReset} style={{width:"100%",marginTop:10,color:"#e8a995"}}>이 기기의 기록과 계정 삭제</button><div className="stat-label" style={{marginTop:13}}>배경 음악은 Web Audio 합성음으로 재생됩니다. 외부 이미지·글꼴·음원은 사용하지 않습니다.</div>
     <div className="button-row"><button className="primary-button" onClick={()=>{onProfile(name,avatar);onClose();}}>완료</button></div>
   </section></div>;
 }
 function SettingSwitch({label,checked,onChange}:{label:string;checked:boolean;onChange:(value:boolean)=>void}) { return <div className="setting-row"><span>{label}</span><button className={`switch ${checked?"on":""}`} role="switch" aria-checked={checked} aria-label={label} onClick={()=>onChange(!checked)}/></div>; }
 
-function CustomCategorySheet({onClose,onCreate}:{onClose:()=>void;onCreate:(name:string,group:CategoryDefinition["group"],primary:Trait,secondary:Trait)=>void}) {
-  const [name,setName]=useState("");const [primary,setPrimary]=useState<Trait>("calm");const [secondary,setSecondary]=useState<Trait>("recovery");const [group,setGroup]=useState<CategoryDefinition["group"]>("life");
-  return <div className="sheet-backdrop" onMouseDown={(event)=>{if(event.target===event.currentTarget)onClose();}}><section className="sheet" role="dialog" aria-modal="true" aria-labelledby="custom-heading"><div className="sheet-handle"/><div className="sheet-head"><div><div className="eyebrow">CREATE A NEW ORB</div><h2 id="custom-heading">나만의 행동 만들기</h2></div><button className="icon-btn" aria-label="닫기" onClick={onClose}><X size={16}/></button></div><p className="subtle">고유한 행동 이름과 성장할 특성을 선택해 주세요. 경험치 계산 방식은 다른 행동과 같아요.</p><div className="field"><label htmlFor="custom-name">행동 이름</label><input id="custom-name" value={name} maxLength={20} placeholder="예: 악기 연습" onChange={(event)=>setName(event.target.value)}/></div><div className="form-grid" style={{marginTop:10}}><div className="field"><label>판정 그룹</label><select value={group} onChange={(event)=>setGroup(event.target.value as CategoryDefinition["group"])}>{["knowledge","body","craft","mind","recovery","life","social","leisure","explore"].map((item)=><option key={item} value={item}>{item}</option>)}</select></div><div className="field"><label>첫 번째 특성</label><select value={primary} onChange={(event)=>setPrimary(event.target.value as Trait)}>{TRAITS.map((item)=><option key={item} value={item}>{TRAIT_NAMES[item]}</option>)}</select></div><div className="field"><label>두 번째 특성</label><select value={secondary} onChange={(event)=>setSecondary(event.target.value as Trait)}>{TRAITS.map((item)=><option key={item} value={item}>{TRAIT_NAMES[item]}</option>)}</select></div></div><div className="button-row"><button className="secondary-button" onClick={onClose}>취소</button><button className="primary-button" disabled={!name.trim()} onClick={()=>onCreate(name,group,primary,secondary)}>행동 만들기</button></div></section></div>;
+function CustomCategorySheet({onClose,onCreate}:{onClose:()=>void;onCreate:(name:string,group:CategoryDefinition["group"],primary:Trait,secondary:Trait,icon:string,color:string,metricSchemaKey:NonNullable<CategoryDefinition["metricSchemaKey"]>,tag:string)=>void}) {
+  const [name,setName]=useState("");const [primary,setPrimary]=useState<Trait>("calm");const [secondary,setSecondary]=useState<Trait>("recovery");const [group,setGroup]=useState<CategoryDefinition["group"]>("life");const [icon,setIcon]=useState("✦");const [color,setColor]=useState("#b9a071");const [metricSchemaKey,setMetricSchemaKey]=useState<NonNullable<CategoryDefinition["metricSchemaKey"]>>("duration");const [tag,setTag]=useState("custom");
+  return <div className="sheet-backdrop" onMouseDown={(event)=>{if(event.target===event.currentTarget)onClose();}}><section className="sheet" role="dialog" aria-modal="true" aria-labelledby="custom-heading"><div className="sheet-handle"/><div className="sheet-head"><div><div className="eyebrow">CREATE A NEW ORB</div><h2 id="custom-heading">나만의 행동 만들기</h2></div><button className="icon-btn" aria-label="닫기" onClick={onClose}><X size={16}/></button></div><p className="subtle">이름과 표시를 고르고 기록 방식과 성장 특성을 정해 주세요. 경험치 곡선은 시스템 행동과 같아요.</p><div className="field"><label htmlFor="custom-name">행동 이름</label><input id="custom-name" value={name} maxLength={20} placeholder="예: 악기 연습" onChange={(event)=>setName(event.target.value)}/></div><div className="form-grid" style={{marginTop:10}}><div className="field"><label htmlFor="custom-icon">아이콘</label><input id="custom-icon" value={icon} maxLength={8} onChange={(event)=>setIcon(event.target.value)}/></div><div className="field"><label htmlFor="custom-color">색상</label><input id="custom-color" type="color" value={color} onChange={(event)=>setColor(event.target.value)}/></div><div className="field"><label htmlFor="custom-template">기록 템플릿</label><select id="custom-template" value={metricSchemaKey} onChange={(event)=>setMetricSchemaKey(event.target.value as NonNullable<CategoryDefinition["metricSchemaKey"]>)}>{[["duration","시간"],["count","횟수"],["sets","세트"],["distance","거리"],["check","체크"],["rating","평점"]].map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></div><div className="field"><label htmlFor="custom-tag">성격 태그</label><input id="custom-tag" value={tag} maxLength={100} onChange={(event)=>setTag(event.target.value)} placeholder="예: craft"/></div><div className="field"><label htmlFor="custom-group">판정 그룹</label><select id="custom-group" value={group} onChange={(event)=>setGroup(event.target.value as CategoryDefinition["group"])}>{["knowledge","body","craft","mind","recovery","life","social","leisure","explore"].map((item)=><option key={item} value={item}>{item}</option>)}</select></div><div className="field"><label htmlFor="custom-primary">첫 번째 특성</label><select id="custom-primary" value={primary} onChange={(event)=>setPrimary(event.target.value as Trait)}>{TRAITS.map((item)=><option key={item} value={item}>{TRAIT_NAMES[item]}</option>)}</select></div><div className="field"><label htmlFor="custom-secondary">두 번째 특성</label><select id="custom-secondary" value={secondary} onChange={(event)=>setSecondary(event.target.value as Trait)}>{TRAITS.map((item)=><option key={item} value={item}>{TRAIT_NAMES[item]}</option>)}</select></div></div><div className="button-row"><button className="secondary-button" onClick={onClose}>취소</button><button className="primary-button" disabled={!name.trim()||!icon.trim()} onClick={()=>onCreate(name,group,primary,secondary,icon,color,metricSchemaKey,tag)}>행동 만들기</button></div></section></div>;
 }
 
 function EventSheet({state,onClose}:{state:AppState;onClose:()=>void}) {

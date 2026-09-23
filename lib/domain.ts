@@ -22,6 +22,7 @@ export type CategoryDefinition = {
   types: string[];
   isCustom?: boolean;
   tag?: string;
+  metricSchemaKey?: "duration" | "count" | "sets" | "distance" | "check" | "rating";
 };
 
 export const TRAITS: Trait[] = ["knowledge", "strength", "creativity", "recovery", "bond", "calm"];
