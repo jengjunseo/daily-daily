@@ -19,6 +19,10 @@ test("guest onboarding, study log, chronicle, and local settings", async ({ page
   await expect(page.getByRole("heading", { name: "연대기" })).toBeVisible();
   await expect(page.getByText("수학", { exact: true }).first()).toBeVisible();
 
+  // A log can trigger the chance encounter sheet asynchronously after saving.
+  await page.waitForTimeout(250);
+  const encounterReturnButton = page.getByRole("button", { name: "기록실로 돌아가기" });
+  if (await encounterReturnButton.isVisible()) await encounterReturnButton.click();
   await page.getByRole("button", { name: "홈", exact: true }).click();
   await page.getByRole("button", { name: /잠자기 시작/ }).click();
   await expect(page.getByRole("button", { name: "기상" })).toBeVisible();
