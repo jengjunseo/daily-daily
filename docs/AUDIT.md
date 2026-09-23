@@ -36,4 +36,18 @@ The GitHub repository is empty, so there is no existing application route or beh
 
 The Vercel project exists but has no deployments. The project is listed under the connected Vercel team, but its Git link, framework/root settings, plan, and environment-variable names have not been verified. No local Vercel CLI or Vercel project link was found. The local GitHub CLI token is invalid; commits will be pushed through the connected GitHub integration if local authenticated Git access remains unavailable.
 
+## Implementation verification
 
+Implementation was added on the workspace branch `feat/daily-daily` after the audit above. The delivered application uses Next.js App Router, TypeScript, Tailwind CSS, React state, Vitest, Playwright, Drizzle, and a PostgreSQL migration. There was no pre-existing data to preserve.
+
+- `npm run lint` — passed.
+- `npm run typecheck` — passed.
+- `npm test` — 4 files, 15 tests passed. Includes the SQL migration applied twice in PGlite, uniqueness enforcement, 23:00–1:30 day splitting, New York spring/fall DST, sleep date attribution, deterministic judgments, satisfying fixtures for every non-fallback hero rule, protected heroes 019–021, short-sleep rarity gate, settlement revision/idempotency, event replay idempotency, reward idempotency, XP cap, and event content minimums.
+- `npm run test:e2e` — 1 Playwright test passed at the iPhone 13 viewport in Chromium: guest profile, study record, chronicle, sleep start and wake, and settings persistence.
+- `npm run build` — passed; `/` prerenders, `/api/health` and `/api/cron/settle` run dynamically.
+- `npm audit --json` — 0 reported vulnerabilities across 617 resolved packages.
+- Lighthouse mobile scoring was not run.
+
+## Runtime boundary
+
+The application is local-first. IndexedDB and localStorage are used for the active profile; there is no sign-in provider, authenticated log API, server-side account isolation, or automatic multi-device sync. The PostgreSQL schema is an integration artifact and is not connected to the client flow. `/api/cron/settle` verifies `CRON_SECRET`, but no cloud settlement worker runs; it skips when `DATABASE_URL` is absent and returns 503 if a database is configured without the worker. No Cron schedule is registered. Vercel project settings, environment variables, and plan remain unverified until the deployment attempt.
