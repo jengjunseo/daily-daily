@@ -29,6 +29,19 @@ export const ITEMS: ItemDefinition[] = [
   { id: "code-breaker-sword", name: "코드 브레이커", type: "equipment", description: "이그니스의 전설 검, 외형 전용", icon: "⚔", rarity: "epic", appearanceOnly: true },
   { id: "index-of-all", name: "만물의 색인", type: "relic", description: "서렌의 잃어버린 색인을 복원한 유물", icon: "▤", rarity: "epic" },
   { id: "eternal-spring", name: "영원한 봄", type: "skin", description: "정령의 숲을 본뜬 홈 배경", icon: "❋", rarity: "epic" },
+  { id: "ink-vial", name: "잉크 병", type: "material", description: "기록관의 반듯한 서재에서 찾은 잉크", icon: "▣", rarity: "common" },
+  { id: "rune-dust", name: "룬 가루", type: "material", description: "시작한 손길을 기억하는 푸른 가루", icon: "✧", rarity: "common" },
+  { id: "fox-feather", name: "여우 깃털", type: "material", description: "숲길을 지나간 여우가 남긴 깃털", icon: "❧", rarity: "common" },
+  { id: "star-fragment", name: "별 조각", type: "relic", description: "충분히 쉰 밤의 맑은 결을 품은 조각", icon: "✦", rarity: "rare" },
+  { id: "leaf-charm", name: "잎사귀 부적", type: "relic", description: "쉬어도 괜찮다는 숲의 약속", icon: "❋", rarity: "rare" },
+  { id: "index-shard", name: "색인 조각", type: "material", description: "읽은 문장을 새로운 서가로 잇는 조각", icon: "▤", rarity: "rare" },
+  { id: "letter-seal", name: "편지 봉인", type: "material", description: "멀리 있는 인연을 다시 잇는 봉인", icon: "✉", rarity: "rare" },
+  { id: "spirit-seed", name: "정령의 씨앗", type: "material", description: "숲의 정령이 감사의 마음으로 건넨 씨앗", icon: "❋", rarity: "rare" },
+  { id: "rainbow-spice", name: "무지개 향신료", type: "material", description: "기분 좋은 식탁에 더해진 다채로운 향", icon: "✿", rarity: "rare" },
+  { id: "asteria-map", name: "아스테리아 지도", type: "relic", description: "새로운 지역을 잇는 대륙의 지도", icon: "⌖", rarity: "epic" },
+  { id: "manual-fragment", name: "비전서 조각", type: "material", description: "나만의 수련이 기록된 비전서의 일부", icon: "▤", rarity: "common" },
+  { id: "personal-manual", name: "개인 비전서", type: "relic", description: "직접 지은 행동의 이름을 보존하는 책", icon: "▤", rarity: "rare" },
+  { id: "innkeeper-title", name: "여관의 단골", type: "title", description: "따뜻한 식탁을 함께 나눈 모험가의 칭호", icon: "⚑", rarity: "rare" },
 ];
 
 export const RECIPES: Recipe[] = [
@@ -37,4 +50,3 @@ export const RECIPES: Recipe[] = [
 ];
 
 export const ITEM_BY_ID = new Map(ITEMS.map((item) => [item.id, item]));
-

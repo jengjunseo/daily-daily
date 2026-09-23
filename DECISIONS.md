@@ -12,4 +12,4 @@
 - Persist completed records locally and settle past dates lazily when the app opens or a historic record changes. Today's date remains unsettled.
 - Preserve idempotent event outcomes with a signature-to-outcome ledger in local state so identical input cannot be replayed to reroll an event.
 - The PostgreSQL schema and additive migration are included, but do not imply a server data path is active until an auth provider and per-user API are connected. Cron authentication exists without a registered schedule or worker.
-- Verification passed locally: lint, typecheck, 15 unit tests across four files, a mobile Playwright flow, production build, and npm audit. Lighthouse has not been measured.
+- Verification passed locally: lint, typecheck, 17 unit tests across four files, a mobile Playwright flow, production build, and npm audit. Lighthouse has not been measured.

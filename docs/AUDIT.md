@@ -42,7 +42,7 @@ Implementation was added on the workspace branch `feat/daily-daily` after the au
 
 - `npm run lint` — passed.
 - `npm run typecheck` — passed.
-- `npm test` — 4 files, 15 tests passed. Includes the SQL migration applied twice in PGlite, uniqueness enforcement, 23:00–1:30 day splitting, New York spring/fall DST, sleep date attribution, deterministic judgments, satisfying fixtures for every non-fallback hero rule, protected heroes 019–021, short-sleep rarity gate, settlement revision/idempotency, event replay idempotency, reward idempotency, XP cap, and event content minimums.
+- `npm test` — 4 files, 17 tests passed. Includes the SQL migration applied twice in PGlite, uniqueness enforcement, 23:00–1:30 day splitting, New York spring/fall DST, sleep date attribution, deterministic judgments, selectable fixtures for all 100 heroes, 500 seeded log-input fuzz cases, protected heroes 019–021, short-sleep rarity gate, settlement revision/idempotency, event replay idempotency, reward idempotency, XP cap, event/item/quest/recipe/region reference checks, and event template/content minimums.
 - `npm run test:e2e` — 1 Playwright test passed at the iPhone 13 viewport in Chromium: guest profile, study record, chronicle, sleep start and wake, and settings persistence.
 - `npm run build` — passed; `/` prerenders, `/api/health` and `/api/cron/settle` run dynamically.
 - `npm audit --json` — 0 reported vulnerabilities across 617 resolved packages.

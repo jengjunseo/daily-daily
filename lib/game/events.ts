@@ -1,7 +1,9 @@
-import { TRAIT_NAMES, type AppState, type ActivityLog, type Trait } from "@/lib/domain";
-import { EVENTS, type EventDefinition, type EventRarity } from "@/content/events";
+import { CATEGORIES, TRAIT_NAMES, type AppState, type ActivityLog, type Trait } from "@/lib/domain";
+import { EVENTS, validateEventContent, type EventDefinition, type EventRarity } from "@/content/events";
+import { ITEM_BY_ID } from "@/content/items";
+import { QUESTS } from "@/content/quests";
 import type { DayFeatures } from "@/lib/game/features";
-import { evaluateRule } from "@/lib/game/rules-dsl";
+import { evaluateRule, type RuleExpr } from "@/lib/game/rules-dsl";
 import { addDateDays, sleepAttributedDate } from "@/lib/game/time";
 import { stableDigest, seededRandom } from "@/lib/game/rng";
 import { grantRewardOnce } from "@/lib/game/progression";
@@ -190,11 +192,34 @@ export function eventRarityLabel(rarity: EventRarity): string {
 }
 
 export function validateEventDefinitions(): string[] {
-  const errors: string[] = [];
-  const ids = new Set<string>();
+  const errors: string[] = validateEventContent();
+  const categories = new Set([...CATEGORIES.map((category) => category.key), "custom"]);
+  const quests = new Set(QUESTS.map((quest) => quest.id));
+  const validateRule = (rule: RuleExpr, eventId: string): void => {
+    if ("all" in rule) rule.all.forEach((child) => validateRule(child, eventId));
+    else if ("any" in rule) rule.any.forEach((child) => validateRule(child, eventId));
+    else if ("not" in rule) validateRule(rule.not, eventId);
+    else if ("cat" in rule && !categories.has(rule.cat)) errors.push(`unknown category ${rule.cat} in ${eventId}`);
+    else if ("dayHas" in rule && rule.dayHas !== "__active__" && !categories.has(rule.dayHas)) errors.push(`unknown day category ${rule.dayHas} in ${eventId}`);
+    else if ("after" in rule) {
+      if (!categories.has(rule.after.category)) errors.push(`unknown after category ${rule.after.category} in ${eventId}`);
+      if (rule.after.beforeCategory && !categories.has(rule.after.beforeCategory)) errors.push(`unknown before category ${rule.after.beforeCategory} in ${eventId}`);
+    } else if ("streakDays" in rule && rule.streakDays.category !== "__active__" && !categories.has(rule.streakDays.category)) {
+      errors.push(`unknown streak category ${rule.streakDays.category} in ${eventId}`);
+    }
+  };
   for (const definition of EVENTS) {
-    if (ids.has(definition.id)) errors.push(`duplicate event id: ${definition.id}`);
-    ids.add(definition.id);
+    if (!categories.has(definition.category)) errors.push(`unknown event category ${definition.category}: ${definition.id}`);
+    validateRule(definition.trigger, definition.id);
+    for (const itemId of Object.keys(definition.rewards.items ?? {})) {
+      if (!ITEM_BY_ID.has(itemId)) errors.push(`unknown reward item ${itemId} in ${definition.id}`);
+    }
+    if (definition.rewards.startsChain && !quests.has(definition.rewards.startsChain)) {
+      errors.push(`unknown quest ${definition.rewards.startsChain} in ${definition.id}`);
+    }
+    for (const trait of Object.keys(definition.rewards.xp ?? {})) {
+      if (!(trait in TRAIT_NAMES)) errors.push(`unknown reward trait ${trait} in ${definition.id}`);
+    }
   }
   return errors;
 }

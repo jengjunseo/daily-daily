@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { HEROES } from "@/content/heroes";
 import { EVENTS } from "@/content/events";
+import { ITEMS, RECIPES } from "@/content/items";
+import { QUESTS } from "@/content/quests";
+import { REGIONS } from "@/content/regions";
 import { createInitialState } from "@/lib/storage";
 import { extractFeatures } from "@/lib/game/features";
 import { heroMatches, judgeHero } from "@/lib/game/judge";
@@ -8,6 +11,7 @@ import { evaluateLogEvents, validateEventDefinitions } from "@/lib/game/events";
 import { settleLocalDay } from "@/lib/game/settlement";
 import { grantRewardOnce } from "@/lib/game/progression";
 import { baseLogXp, calculateDayXp } from "@/lib/game/xp";
+import { seededRandom } from "@/lib/game/rng";
 import type { ActivityLog } from "@/lib/domain";
 import type { DayFeatures } from "@/lib/game/features";
 
@@ -82,6 +86,115 @@ function reachabilityFixture(no: number): DayFeatures {
   }
 }
 
+function selectionFixture(no: number): DayFeatures {
+  const date = "2026-09-21";
+  const f = extractFeatures([], date, "Asia/Seoul");
+  const c = (key: string, minutes: number) => { f.categoryMin[key] = minutes; };
+  const g = (key: keyof DayFeatures["min"], minutes: number) => { f.min[key] = minutes; };
+  switch (no) {
+    case 1: g("knowledge",240); f.sleepMin=420; f.wakeMinute=300; f.avgFocus=4; break;
+    case 2: f.sleepMin=480; f.activeGroups=5; f.moodAvg=3.5; break;
+    case 3: c("development",360); f.developmentSolved=5; f.sleepMin=420; c("rest",30); break;
+    case 4: f.priorDaySleepMin=240; f.sleepMin=480; f.moodDelta=2; c("rest",60); break;
+    case 5: f.lastSevenWakeMinutes=Array(7).fill(300); f.lastSevenSleepDays=7; break;
+    case 6: f.eventRarities=["legendary"]; f.activeGroups=3; break;
+    case 7: g("knowledge",120); c("exercise",60); c("development",120); f.sleepMin=420; break;
+    case 8: g("knowledge",180); f.knowledgeLate2224Min=60; f.sleepMin=420; break;
+    case 9: c("meditation",45); f.natureOuting=60; c("rest",60); break;
+    case 10: f.distanceKm=15; f.sleepMin=420; break;
+    case 11: f.strengthVolume=8_000; f.sleepMin=420; f.heartyMealCount=1; break;
+    case 12: c("reading",180); break;
+    case 13: c("development",240); f.developmentKinds["설계"]=1; f.developmentResults.done=2; break;
+    case 14: c("creation",240); break;
+    case 15: c("relationship",240); f.relationshipTargets=["가족","친구"]; f.moodAvg=4; break;
+    case 16: c("meditation",90); f.moodDelta=1; f.sleepMin=420; break;
+    case 17: f.wakeMinute=300; f.before0600FocusActivity=60; f.sleepMin=420; break;
+    case 18: f.travelMin=300; break;
+    case 19: c("exercise",90); f.maxGroup="body"; f.rpeMax=7; break;
+    case 20: c("development",240); f.developmentSolved=3; f.maxGroup="craft"; break;
+    case 21: f.sleepMin=600; f.moodAvg=3; break;
+    case 22: f.problemCount=50; f.correctCount=35; break;
+    case 23: f.groupsAt20=5; f.maxGroupShare=.4; break;
+    case 24: f.singleLongLogMin=180; f.singleLongCategory="study"; f.singleLongFocus=5; break;
+    case 25: f.activity1600To2200=240; f.focused1600To2200=150; break;
+    case 26: c("rest",90); f.sleepQuality=4; f.totalActiveMin=180; break;
+    case 27: g("knowledge",120); c("development",120); break;
+    case 28: c("development",90); c("reading",60); break;
+    case 29: f.distanceKm=8; break;
+    case 30: f.homeMeals=3; f.mealSatisfaction=4; break;
+    case 31: c("relationship",120); c("exercise",60); break;
+    case 32: f.writing=90; f.lateNightWritingMin=1; f.sleepMin=360; break;
+    case 33: f.natureOuting=90; c("rest",30); break;
+    case 34: f.strengthMin=60; f.stretching=20; break;
+    case 35: f.studySubjects=["수학","영어","과학"]; break;
+    case 36: c("exercise",60); f.exerciseFollowedByRecovery=true; c("rest",45); f.sleepMin=420; break;
+    case 37: f.bugTasks=3; break;
+    case 38: f.musicCreation=60; c("relationship",60); break;
+    case 39: f.lateNightThoughtMin=30; f.sleepMin=360; break;
+    case 40: f.mealCount=4; f.mealForms=["home","restaurant","delivery"]; break;
+    case 41: c("study",120); f.maxGroup="knowledge"; break;
+    case 42: c("exercise",45); f.maxGroup="body"; break;
+    case 43: c("development",120); f.maxGroup="craft"; break;
+    case 44: f.drawing=60; break;
+    case 45: f.writing=60; break;
+    case 46: c("reading",90); break;
+    case 47: f.walking=45; f.musicLeisure=1; break;
+    case 48: c("rest",120); c("outing",30); f.totalActiveMin=150; break;
+    case 49: f.teaBreaks=1; c("meditation",30); break;
+    case 50: f.games=120; f.moodAvg=3.5; break;
+    case 51: f.videos=120; f.moodAvg=3.5; break;
+    case 52: f.familyMinutes=120; break;
+    case 53: f.petMinutes=30; break;
+    case 54: c("life",90); break;
+    case 55: f.shoppingMinutes=60; break;
+    case 56: f.cafeMinutes=1; g("knowledge",60); break;
+    case 57: f.wakeMinute=420; f.sleepMin=420; f.morningActiveMin=60; break;
+    case 58: f.night2224ActiveMin=90; f.sleepMin=360; break;
+    case 59: f.breakfastAdequate=true; f.lunchAdequate=true; f.dinnerAdequate=true; break;
+    case 60: f.stretching=30; break;
+    case 61: f.reviews=2; break;
+    case 62: c("development",60); f.developmentKinds.review=1; break;
+    case 63: f.deployments=1; break;
+    case 64: c("meditation",20); break;
+    case 65: f.napMin=60; f.sleepMin=360; break;
+    case 66: f.moodDelta=2; f.moodCount=2; break;
+    case 67: f.natureOuting=30; c("rest",30); f.totalActiveMin=60; break;
+    case 68: f.togetherMeals=2; break;
+    case 69: f.teamSports=60; break;
+    case 70: f.exerciseKinds=["등산"]; break;
+    case 71: f.sleepMin=420; f.mealCount=2; f.totalActiveMin=120; break;
+    case 72: c("life",30); f.totalActiveMin=60; break;
+    case 73: g("knowledge",60); break;
+    case 74: c("exercise",50); break;
+    case 75: c("development",60); break;
+    case 76: c("creation",30); break;
+    case 77: c("meal",60); f.mealCount=3; f.totalActiveMin=60; break;
+    case 78: f.sleepMin=480; f.totalActiveMin=60; break;
+    case 79: c("relationship",60); break;
+    case 80: c("rest",60); f.totalActiveMin=120; break;
+    case 81: c("reading",30); break;
+    case 82: c("rest",20); f.totalActiveMin=120; break;
+    case 83: c("leisure",60); f.maxGroup="leisure"; break;
+    case 84: f.categoryMin={study:5,exercise:6,creation:7,rest:8}; break;
+    case 85: f.lateNightActiveMin=60; break;
+    case 86: f.wakeMinute=600; f.sleepMin=420; break;
+    case 87: f.moodAvg=2; f.logCount=1; break;
+    case 88: f.logCount=1; f.totalActiveMin=20; break;
+    case 89: f.logCount=8; f.activeGroups=3; f.totalActiveMin=30; break;
+    case 90: f.overeatCount=1; f.moodAvg=3; break;
+    case 91: f.mealTypes=["야식"]; break;
+    case 92: f.quickDeliveryMeals=2; break;
+    case 93: f.walking=30; break;
+    case 94: f.napMin=10; break;
+    case 95: f.timerRecords=2; break;
+    case 96: f.priorDayLogCount=1; break;
+    case 97: f.logCount=1; f.totalActiveMin=30; f.distinctCategories=["sleep"]; break;
+    case 98: f.logCount=1; f.totalActiveMin=30; f.distinctCategories=["meal"]; break;
+    case 100: f.accountCreatedDate=date; break;
+  }
+  return f;
+}
+
 describe("hero judgement", () => {
   it("contains 100 unique hero definitions and always returns a fallback", () => {
     expect(HEROES).toHaveLength(100);
@@ -101,6 +214,32 @@ describe("hero judgement", () => {
   it("has a satisfying feature fixture for every non-fallback hero rule", () => {
     for (const hero of HEROES.filter((item) => item.no !== 99)) {
       expect(heroMatches(hero.no, reachabilityFixture(hero.no)), `hero ${hero.no} should be reachable`).toBe(true);
+    }
+  });
+
+  it("can select all 100 hero definitions with a targeted fixture", () => {
+    for (const hero of HEROES) {
+      expect(judgeHero(selectionFixture(hero.no)).hero.no, `hero ${hero.no} should be selectable`).toBe(hero.no);
+    }
+  });
+
+  it("always returns one catalog hero for 500 seeded activity-log inputs", () => {
+    const categories = ["sleep","meal","study","development","exercise","meditation","rest","reading","creation","leisure","outing","relationship","life","custom-test"];
+    const baseTime = Date.parse("2026-09-21T00:00:00.000Z");
+    for (let sample=0; sample<500; sample+=1) {
+      const count = Math.floor(seededRandom(sample,"count")*5);
+      const logs = Array.from({length:count},(_,index)=>{
+        const categoryKey=categories[Math.floor(seededRandom(sample,index,"category")*categories.length)]!;
+        const started=baseTime+Math.floor(seededRandom(sample,index,"start")*86_400_000);
+        const durationMin=1+Math.floor(seededRandom(sample,index,"duration")*90);
+        const details: Record<string,unknown>={};
+        if(categoryKey==="sleep") details.sleepType=seededRandom(sample,index,"sleep")<.2?"nap":"night";
+        if(categoryKey==="meal") details.mealType=["아침","점심","저녁"][Math.floor(seededRandom(sample,index,"meal")*3)];
+        if(categoryKey==="exercise") details.exerciseType=["걷기","등산","달리기"][Math.floor(seededRandom(sample,index,"exercise")*3)];
+        return log({id:`a0000000-0000-4000-8000-${String(sample*5+index).padStart(12,"0")}`,categoryKey,typeKey:categoryKey,startedAt:new Date(started).toISOString(),endedAt:new Date(started+durationMin*60_000).toISOString(),durationMin,details,mood:seededRandom(sample,index,"mood")<.2?null:1+Math.floor(seededRandom(sample,index,"mood-value")*5)});
+      });
+      const result=judgeHero(extractFeatures(logs,"2026-09-21","Asia/Seoul"));
+      expect(HEROES.some((hero)=>hero.no===result.hero.no),`sample ${sample} must return one hero`).toBe(true);
     }
   });
 
@@ -168,5 +307,15 @@ describe("experience and content rules", () => {
     expect(EVENTS.filter((event) => event.rarity === "epic").length).toBeGreaterThanOrEqual(5);
     expect(EVENTS.filter((event) => event.rarity === "legendary").length).toBeGreaterThanOrEqual(3);
     for (const event of EVENTS) expect(event.body.length).toBeGreaterThanOrEqual(2);
+    const itemIds=new Set(ITEMS.map((item)=>item.id));
+    expect(itemIds.size).toBe(ITEMS.length);
+    expect(QUESTS).toHaveLength(5);
+    for(const quest of QUESTS) expect(itemIds.has(quest.rewardItem),`quest ${quest.id} reward item`).toBe(true);
+    for(const recipe of RECIPES){
+      expect(itemIds.has(recipe.result),`recipe ${recipe.id} result`).toBe(true);
+      for(const itemId of Object.keys(recipe.ingredients)) expect(itemIds.has(itemId),`recipe ${recipe.id} ingredient ${itemId}`).toBe(true);
+    }
+    expect(REGIONS).toHaveLength(12);
+    expect(new Set(REGIONS.map((region)=>region.id)).size).toBe(REGIONS.length);
   });
 });
