@@ -45,3 +45,8 @@ The unit suite covers timezone/DST behavior, all 100 hero choices, seeded input 
 ## Audio and visual assets
 
 Ambient tones and the save cue are synthesized with Web Audio. There are no bundled third-party audio tracks, fonts, illustrations, or photos. See [audio credits](public/audio/CREDITS.md).
+
+## Outstanding verification
+
+- [ ] Verify production database migration, GitHub OAuth, environment configuration and Cron activation in the intended environment.
+- [ ] Exercise OAuth and cloud sync against a configured database, including offline replay and conflict resolution; existing Playwright coverage is local-guest focused.
